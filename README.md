@@ -27,6 +27,67 @@ esp32-nav/
 
 ---
 
+## Tech Stack
+
+Semuanya gratis, tanpa API key, tanpa akun, tanpa biaya bulanan. Tidak ada
+build step: yang kamu upload ke hosting adalah file yang persis seperti di repo.
+
+### Peta & routing
+
+| Pilih | Dipakai untuk | Keterangan |
+|-------|---------------|------------|
+| **Leaflet 1.9.4** | Render peta | Dimuat dari unpkg, satu file JS + CSS |
+| **OpenStreetMap tiles** | Gambaran peta jalan | Tile raster, `tile.openstreetmap.org` |
+| **OSRM** | Menghitung rute jalan | `router.project-osrm.org`, mendukung `steps=true` untuk belokan |
+| **Nominatim** | Pencarian alamat | `nominatim.openstreetmap.org/search` |
+| **Google Fonts** | DM Sans + DM Mono | Typography saja, bukan data |
+
+Ketiganya adalah API publik tanpa autentikasi. Konsekuensinya jujur dan perlu
+dikusung: Nominatim dan OSRM punya **rate limit** dan **tidak ada jaminan
+uptime**. Untuk dipakai pribadi atau skala kecil ini sepenuhnya wajar; jangan
+mengandalkannya untuk dipakai luas atau jadi sistem produksi.
+
+> Semua host di atas **tidak boleh** di-cache service worker. Ini aturan
+> yang paling sering dilanggar dan paling merusak: cache tile
+> OpenStreetMap melanggar kebijakan mereka. Service worker di sini memakai
+> pola *deny-by-default* — hanya file shell same-origin yang boleh masuk cache.
+
+### Web app
+
+- **Tanpa framework.** Satu `index.html` berisi HTML + CSS + JS. Tidak ada React,
+  Vue, atau build step. Alasannya: aplikasi ini harus bisa di-host di mana saja
+  dan tetap jalan, termasuk setelah lima tahun tidak disentuh.
+- **Web Bluetooth** (`navigator.bluetooth`) untuk bicara ke ESP32. Hanya
+  tersedia di Chrome/Android, dan butuh **HTTPS** + user gesture.
+- **PWA** — `manifest.json` + `sw.js` ditulis tangan, tanpa Workbox.
+- **Web Share Target** — menangkap `POST` dari share sheet Android di dalam
+  service worker, lalu meneruskan lewat fragment. Tujuannya: link tujuan
+  **tidak pernah sampai ke server**.
+- **Screen Wake Lock** + fallback audio WAV yang di-inline sebagai base64,
+  supaya layar tidak mati saat menjelajah sambil mengendarai.
+- **GPS** via `navigator.geolocation.watchPosition`, dengan `pendingRestore`
+  supaya refresh saat tengah bernavigasi tidak ikut hilang.
+
+### Firmware
+
+- **ESP32** (C3 atau WROOM) + **SSD1306 OLED 128×64** lewat I2C.
+- **NimBLE-Arduino 2.x** — GATT server, protokol Nordic UART UUID.
+- **Adafruit GFX + SSD1306** — menggambar panah secara prosedural (tidak ada
+  sprite bitmap), supaya semuanya muat di flash kecil.
+- **FreeRTOS queue** — `onWrite` hanya accumulate lalu enqueue, tidak
+  menggambar di dalam context task GATT. Menunda BLE akan merusak koneksi.
+
+### Test
+
+- **Node.js** (`node --test` style, runner sendiri) — logika web di-*extract*
+  dari `index.html` lalu dijalankan, jadi yang diuji adalah kode yang benar-benar
+  terkirim.
+- **g++** — firmware dikompilasi ke host dengan stub Arduino/NimBLE di
+  `test/stubs.h`. Nol dependency, nol `arduino-cli`.
+- **479 check**, semuanya jalan di laptop tanpa board dan tanpa Chrome.
+
+---
+
 ## Cara Pakai
 
 ### 1. Upload kode ke ESP32
@@ -34,8 +95,31 @@ esp32-nav/
 **Library yang dibutuhkan (Arduino IDE → Library Manager):**
 - `Adafruit SSD1306`
 - `Adafruit GFX Library`
+- `NimBLE-Arduino` (**wajib versi 2.x**)
 
-**Wiring OLED ke ESP32:**
+> **Kenapa NimBLE, bukan BLE bawaan?** Firmware ini memakai stack **NimBLE**,
+> bukan `BLEDevice.h` bawaan ESP-IDF. Alasannya bukan selera: `BLEDevice.h`
+> **hanya ada di chip ESP32 asli**. ESP32-C3 punya radio BLE 5.0, tapi tidak
+> punya stack itu, sehingga kode versi lama **tidak akan bisa dikompilasi**
+> di C3 sama sekali. NimBLE jalan di **kedua** chip, jadi satu sketch ini
+> bisa dipakai untuk WROOM maupun C3 tanpa perubahan.
+>
+> Wajib 2.x karena API-nya berubah drastis dari 1.x — parameter callback
+> berubah dan nama fungsi advertising berbeda. Di 1.x, kode ini gagal
+> compile dengan error yang membingungkan.
+
+**Board yang bisa dipakai:**
+
+| Board | Pilihan di Arduino IDE | Status |
+|-------|------------------------|--------|
+| ESP32-C3 | `ESP32C3 Dev Module` | didukung |
+| ESP32 asli (WROOM / D0WD) | `ESP32 Dev Module` | didukung |
+| ESP32-S3, C6, H2 | — | belum diverifikasi |
+
+Buka `esp32_nav/esp32_nav.ino` di Arduino IDE, pilih board yang sesuai, lalu
+upload.
+
+**Wiring OLED ke ESP32 asli (WROOM):**
 | OLED | ESP32 |
 |------|-------|
 | VCC  | 3.3V  |
@@ -43,7 +127,16 @@ esp32-nav/
 | SDA  | GPIO 21 |
 | SCL  | GPIO 22 |
 
-Buka `esp32_nav/esp32_nav.ino` di Arduino IDE, pilih board **ESP32 Dev Module**, lalu upload.
+**Kalau pakai ESP32-C3:** jangan memakai pin di atas. C3 tidak punya GPIO 21/22,
+dan pin I2C default-nya **berbeda tiap board**. Cek silkscreen atau pinout
+board-mu — sebagian C3 memakai SDA/SCL di GPIO 8/9, sebagian di 6/7. Kalau
+pinnya tidak cocok, ganti angka GPIO di bagian `setup()`.
+
+> **Belum pernah diuji di hardware.** Port ke NimBLE diverifikasi lewat test
+> suite (stub-nya mencerminkan API 2.x), tapi belum pernah di-flash ke board
+> asli. Kalau advertising-nya bermasalah, gejalanya khas: Wi-Fi dan OLED
+> normal, tapi **Chrome menampilkan "no devices found"** padahal ESP32
+> menyala dan berada di dekat.
 
 ---
 
@@ -129,6 +222,15 @@ server** dan tidak muncul di access log.
   mengaktifkan service worker setelah halaman pertama selesai dimuat, dan
   share target butuh SW yang sudah aktif. Kalau Share masih membuka halaman
   kosong, buka aplikasinya sekali, tutup, lalu coba lagi.
+
+> **Penting: kalau Share tidak muncul di daftar, uninstall lalu install ulang.**
+> Share target didaftarkan oleh Chrome **pada saat PWA di-install**, bukan
+> saat aplikasi di-update. Kalau kamu install versi yang sudah punya fitur
+> ini, app-mu **harus** dicabut dulu: tekan ikon app di home screen lama,
+> tahan, pilih *Uninstall* / *Remove*, baru install ulang dari Chrome.
+> Setelah itu **tutup lalu buka sekali** aplikasinya, supaya service worker
+> aktif. Tanpa langkah itu, Share akan tetap tidak muncul, apa pun
+> yang kamu coba.
 
 Kalau Share tidak muncul — iOS tidak mendukungnya sama sekali, atau kamu
 share dari browser — pakai jalur cadangan di bawah.
@@ -241,16 +343,21 @@ bash test/run.sh
 
 | Suite | Isi | Check |
 |---|---|---|
-| `test_firmware.cpp` | `formatDist`, sanitasi, parsing, geometri 13 ikon, batas layar, pemenggalan footer, framing BLE, antrean penuh, callback koneksi | 123 |
+| `test_firmware.cpp` | `formatDist`, sanitasi, parsing, geometri 13 ikon, batas layar, pemenggalan footer, framing BLE, antrean penuh, callback koneksi, guard NimBLE | 128 |
 | `test_cross.cpp` | Payload dipecah jadi chunk 20 byte, di-feed ke firmware, hasilnya dibandingkan baris demi baris | 40 |
-| `test_web.mjs` | `sanitizeForBLE`, `clampCode`, `normalizeDist`, 23 kasus `maneuverCode`, format payload, pemecahan chunk, antrean kirim | 91 |
+| `test_web.mjs` | `sanitizeForBLE`, `clampCode`, `normalizeDist`, 23 kasus `maneuverCode`, format payload, pemecahan chunk, antrean kirim | 146 |
 | `test_wake.mjs` | Acquire/release wake lock, reacquire saat `visibilitychange`, fallback audio, kondisi gagal | 42 |
+| `test_trip.mjs` | Persistensi tujuan, restore tertunda, refresh saat bernavigasi, storage rusak | 50 |
+| `test_pwa.mjs` | Manifest, aturan cache service worker, share target, fragment vs query string | 73 |
+
+Total **479 check**, semuanya jalan di host tanpa board, tanpa `arduino-cli`,
+tanpa Chrome.
 
 `test/payloads.txt` adalah sumber data bersama: byte yang dikirim web
 dipakai `test_cross.cpp` untuk membuktikan firmware meng-assemble dan
 meng-parse-nya dengan hasil yang sama.
 
-Yang **tidak** bisa diuji tanpa hardware: integrasi library Asix BLE
+Yang **tidak** bisa diuji tanpa hardware: integrasi library NimBLE
 sungguhan, perilaku I2C SSD1306, dan Screen Wake Lock di Chrome Android.
 
 ## Catatan
