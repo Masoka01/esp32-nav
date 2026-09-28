@@ -481,6 +481,9 @@ const state = {
   navigating: false,
   // Perjalanan tersimpan yang menunggu posisi GPS pertama. Lihat restoreTrip.
   pendingRestore: null,
+  // Tujuan yang sudah dipilih tapi masih menunggu posisi GPS pertama sebelum
+  // rutenya bisa dihitung. Lihat selectDestination.
+  pendingRoute: null,
   bleDevice: null,
   bleChar: null,
   wakeLock: null,
@@ -530,6 +533,17 @@ function setUserPos(lat, lng) {
   // tersimpan tidak pernah pulih.
   if (state.pendingRestore) {
     completeRestore(state.pendingRestore).catch(() => { /* fetchRoute sudah toast sendiri */ });
+    return;
+  }
+
+  // Tujuan yang sudah dipilih tapi masih menunggu posisi pertama. Pola-nya
+  // sama dengan pendingRestore di atas: jangan bail, tunggu, selesaikan.
+  // fetchRoute() sudah memanggil showNavControls() di dalamnya kalau berhasil,
+  // jadi jangan dipanggil lagi di sini — kalau rute gagal diambil, kontrol
+  // navigasi harus tetap tersembunyi.
+  if (state.pendingRoute) {
+    state.pendingRoute = null;
+    fetchRoute().catch(() => { /* fetchRoute sudah toast sendiri */ });
     return;
   }
 
@@ -834,6 +848,33 @@ function cleanIncomingLink() {
   history.replaceState(null, '', location.pathname + location.search);
 }
 
+// Satu pintu untuk membaca link dari fragment, dipakai boot maupun hashchange.
+// Mengembalikan true kalau ada link yang diproses.
+function consumeIncomingLink() {
+  const link = readIncomingLink();
+  if (!link) return false;
+  cleanIncomingLink();
+  return handleMapsInput(link);
+}
+
+// Share target yang SEDANG TERBUKA tidak reload halaman.
+//
+// sw.js membalas POST dari share sheet dengan redirect ke './#u=...' —
+// perubahan fragment saja. Kalau aplikasinya sudah terbuka di './', navigasi
+// itu SAME-DOCUMENT: browser tidak memuat ulang dokumen, sehingga skrip boot
+// di bawah tidak pernah jalan lagi dan link-nya hangus diam-diam. Gejalanya
+// persis seperti ini: share sukses, aplikasi terbuka, tapi tidak ada
+// apa-apa yang terjadi.
+//
+// Dengarkan hashchange supaya link yang masuk ke aplikasi yang sudah hidup
+// tetap diproses. Ini juga menutup kasus "user share dua kali berturut-turut".
+//
+// Dibuat named function, bukan arrow inline, supaya test bisa memanggilnya
+// langsung — bug ini hilang hanya kalau listener-nya sengaja dibuang, dan
+// arrow inline tidak bisa diuji tanpa browser.
+function handleHashChange() { consumeIncomingLink(); }
+window.addEventListener('hashchange', handleHashChange);
+
 const bmPanel = document.getElementById('bookmarklet-panel');
 const bmCode  = document.getElementById('bookmarklet-code');
 
@@ -1034,12 +1075,26 @@ async function selectDestination(lat, lng, name) {
   // tertunda: kalau dibiarkan, restore yang telat datang akan menimpa tujuan
   // yang baru saja dipilih.
   state.pendingRestore = null;
+  // Tujuan yang lebih baru membatalkan yang masih tertunda, supaya restore
+  // atau rute tertunda tidak menimpa tujuan yang baru saja dipilih.
+  state.pendingRoute = null;
   saveTrip();
 
   if (state.destMarker) state.destMarker.setLatLng([lat, lng]);
   else state.destMarker = L.marker([lat, lng], { icon: destIcon }).addTo(map);
 
-  if (!state.userLat) { toast('Aktifkan GPS dulu'); return; }
+  // Posisi GPS itu ASYNC. Tepat setelah aplikasi dibuka — yang justru terjadi
+  // setiap kali share target dipakai — userLat masih null, dan kode lama hanya
+  // menampilkan "Aktifkan GPS dulu" lalu menyerah. Rute tidak pernah dihitung
+  // dan tidak ada percobaan ulang, jadi user melihat pin di peta tanpa rute.
+  // Simpan dulu, biarkan setUserPos yang menyelesaikan — pola yang sama dengan
+  // pendingRestore di atas.
+  if (!state.userLat) {
+    state.pendingRoute = { lat, lng };
+    setInstruction('⏳', 'Menunggu GPS untuk menghitung rute...');
+    toast('Menunggu GPS...');
+    return;
+  }
 
   setInstruction('⏳', 'Menghitung rute...');
   await fetchRoute();
@@ -1573,13 +1628,7 @@ if ('serviceWorker' in navigator) {
 // Kalau halaman dibuka dari bookmarklet, tidak ada yang dipulihkan: tautan yang
 // barusan dikirim adalah niat eksplisit user dan harus menang atas perjalanan
 // yang tersimpan sebelumnya. Kalau tidak, kembalikan perjalanan yang lalu.
-const incomingLink = readIncomingLink();
-if (incomingLink) {
-  cleanIncomingLink();
-  handleMapsInput(incomingLink);
-} else {
-  restoreTrip();
-}
+if (!consumeIncomingLink()) restoreTrip();
 </script>
 </body>
 </html>

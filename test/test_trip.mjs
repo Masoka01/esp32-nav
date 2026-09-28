@@ -43,6 +43,21 @@ const src = [
   block('function stopNavigation', '  toast(\'Navigasi dihentikan\');\n}'),
 ].join('\n\n');
 
+// Jalur share diuji terpisah: consumeIncomingLink() menyentuh location,
+// history, dan handleMapsInput — ketiganya tidak ada di factory utama, dan
+// memaksanya ke sana hanya menambah parameter yang tidak pernah terpakai.
+const shareSrc = [
+  block('function readIncomingLink', 'try { return new URLSearchParams(hash).get(\'u\'); } catch { return null; }\n}'),
+  block('function cleanIncomingLink', 'history.replaceState(null, \'\', location.pathname + location.search);\n}'),
+  block('function consumeIncomingLink', 'return handleMapsInput(link);\n}'),
+  block('function handleHashChange', 'consumeIncomingLink(); }'),
+].join('\n\n');
+
+check(shareSrc.includes('function readIncomingLink'), 'blok readIncomingLink ikut terekstrak utuh');
+check(shareSrc.includes('function cleanIncomingLink'), 'blok cleanIncomingLink ikut terekstrak utuh');
+check(shareSrc.includes('function consumeIncomingLink'), 'blok consumeIncomingLink ikut terekstrak utuh');
+check(shareSrc.includes('function handleHashChange'), 'blok handleHashChange ikut terekstrak utuh');
+
 // Guard: blok yang terekstrak harus utuh, kalau tidak test menguji kode hantu.
 check(src.includes('function restoreTrip'), 'blok restoreTrip ikut terekstrak utuh');
 check(src.includes('function completeRestore'), 'blok completeRestore ikut terekstrak utuh');
@@ -90,7 +105,7 @@ function freshState(extra = {}) {
   return {
     destLat: null, destLng: null, destName: null,
     currentStep: 0, steps: [], destMarker: null, navigating: false,
-    pendingRestore: null,
+    pendingRestore: null, pendingRoute: null,
     userLat: null, userLng: null, userMarker: null, watchId: null, ...extra,
   };
 }
@@ -129,6 +144,32 @@ function makeEnv(state, opts = {}) {
     },
     () => {},
     () => calls.released++);
+}
+
+// Env terpisah untuk jalur share. `location` dan `history` disimulasikan
+// supaya test bisa mengecek apakah fragment benar-benar dibersihkan.
+function makeShareEnv(initialHash, handled = []) {
+  const loc = {
+    hash: initialHash,
+    pathname: '/app/index.html',
+    search: '',
+  };
+  const hist = {
+    replaced: 0,
+    // replaceState di browser juga membersihkan hash. Stub harus menirukan
+    // itu, kalau tidak test kedua (share beruntun) akan membaca hash lama.
+    replaceState(_state, _title, url) {
+      hist.replaced++;
+      loc.hash = '';
+      loc.lastUrl = url;
+    },
+  };
+  const factory = new Function(
+    'location', 'history', 'handleMapsInput',
+    shareSrc + '\nreturn { readIncomingLink, cleanIncomingLink, consumeIncomingLink, handleHashChange };'
+  );
+  const api = factory(loc, hist, link => { handled.push(link); return true; });
+  return { api, loc, hist, handled };
 }
 
 const flush = () => new Promise(r => setTimeout(r, 0));
@@ -348,6 +389,149 @@ section('restore tertunda dibuang oleh aksi user');
   check(state.pendingRestore === null,
         'stopNavigation membuang restore tertunda');
   check(state.navigating === false, 'status navigasi dimatikan');
+}
+
+// ── share tanpa GPS: tujuan menunggu, rute tidak hilang ──────────────────
+section('share tanpa GPS: rute ditunda, bukan dibuang');
+{
+  store.clear();
+  resetCalls();
+  routeCalls = 0;
+  routeSteps = [{ instruction: 'a' }];
+  const state = freshState();
+  const api = makeEnv(state);
+
+  // Persis kondisi saat share target dibuka: getCurrentPosition async,
+  // jadi userLat masih null ketika user menekan "Pakai tujuan ini".
+  await api.selectDestination(-7.445, 112.358, 'WH-2 ARCHER');
+
+  check(state.destLat === -7.445, 'tujuan tetap dipilih');
+  check(state.pendingRoute !== null, 'tujuan yang menunggu GPS DISIMPAN');
+  check(routeCalls === 0, 'belum ada fetch rute tanpa posisi');
+
+  // Versi lama: toast "Aktifkan GPS dulu" lalu return. Toast hilang dalam
+  // 2.5 detik dan tidak ada percobaan ulang, jadi user terkunci di
+  // "tujuan ada, rute tidak ada" selamanya.
+  check(!calls.toast.some(m => /Aktifkan GPS dulu/.test(m)),
+        'tidak lagi menebak user harus mengaktifkan GPS');
+  check(calls.instr.some(t => /Menunggu GPS/.test(t)),
+        'user diberi tahu rute sedang menunggu GPS');
+}
+
+section('posisi pertama menyelesaikan rute yang tertunda');
+{
+  store.clear();
+  resetCalls();
+  routeCalls = 0;
+  routeSteps = [{ instruction: 'a' }, { instruction: 'b' }];
+  const state = freshState();
+  const api = makeEnv(state);
+
+  await api.selectDestination(-7.445, 112.358, 'WH-2 ARCHER');
+  check(state.pendingRoute !== null, 'masih tertunda sebelum ada posisi');
+
+  api.setUserPos(-6.2001, 106.8001);
+  await flush();
+
+  check(state.pendingRoute === null, 'pendingRoute dibersihkan setelah selesai');
+  check(routeCalls === 1, 'rute DIHITUNG setelah posisi pertama tiba, dapat ' + routeCalls);
+}
+
+section('tujuan baru membuang rute tertunda');
+{
+  store.clear();
+  resetCalls();
+  routeCalls = 0;
+  routeSteps = [{ instruction: 'a' }];
+  const state = freshState();
+  const api = makeEnv(state);
+
+  await api.selectDestination(-7.4, 112.3, 'Pertama');
+  check(state.pendingRoute !== null, 'tertunda dulu');
+
+  await api.selectDestination(-7.5, 112.4, 'Kedua');
+  check(state.pendingRoute !== null, 'tujuan kedua juga tertunda (belum ada GPS)');
+  check(state.destName === 'Kedua', 'tujuan kedua yang berlaku');
+
+  // Setelah posisi masuk, hanya yang terakhir yang boleh calculating.
+  routeCalls = 0;
+  api.setUserPos(-6.2001, 106.8001);
+  await flush();
+  check(routeCalls === 1, 'rute yang pending itu milik tujuan terakhir, dapat ' + routeCalls);
+}
+
+// ── share ke aplikasi yang SUDAH TERBUKA ─────────────────────────────────
+//
+// Ini regresi untuk bug yang dilaporkan user: share dari Maps sukses, aplikasi
+// terbuka, tapi tidak ada dialog dan tidak ada rute — sunyi total.
+//
+// Akar masalahnya: sw.js membalas POST dari share sheet dengan redirect ke
+// './#u=...' — perubahan FRAGMENT saja. Kalau aplikasinya sudah terbuka di
+// './', itu navigasi same-document: browser tidak reload dokumen, jadi skrip
+// boot yang memanggil readIncomingLink() tidak pernah jalan lagi.
+section('share ke aplikasi yang sudah terbuka');
+{
+  const link = 'https://maps.google.com/?q=-6.2,106.8';
+  const hash = '#u=' + encodeURIComponent(link);
+  const handled = [];
+  const { api, loc, hist } = makeShareEnv(hash, handled);
+
+  // App sudah hidup di './' (tanpa fragment) — kondisi sebenarnya saat user
+  // share untuk kedua kalinya.
+  loc.hash = hash;
+
+  const processed = api.consumeIncomingLink();
+
+  check(processed === true, 'link dari share diproses');
+  check(handled.length === 1, 'handleMapsInput dipanggil sekali, dapat ' + handled.length);
+  check(handled[0] === link, 'link diteruskan apa adanya, dapat ' + handled[0]);
+  check(hist.replaced === 1, 'fragment dibersihkan supaya refresh tidak parse ulang');
+}
+
+section('hashchange menangkap share saat app terbuka');
+{
+  const link = 'https://www.google.com/maps/place/Monas';
+  const handled = [];
+  const { api, loc, hist } = makeShareEnv('', handled);
+
+  // Tidak ada fragment saat boot — listener inilah satu-satunya penjaga.
+  check(api.consumeIncomingLink() === false, 'boot tanpa fragment tidak memproses apa pun');
+  check(handled.length === 0, 'tidak ada link yang diproses tanpa fragment');
+
+  // Share tiba: browser mengubah hash TANPA reload.
+  loc.hash = '#u=' + encodeURIComponent(link);
+  api.handleHashChange();
+
+  check(handled.length === 1, 'hashchange memproses link yang masuk, dapat ' + handled.length);
+  check(handled[0] === link, 'isi link benar, dapat ' + handled[0]);
+  check(hist.replaced === 1, 'fragment dibersihkan setelah diproses');
+}
+
+section('share dua kali berturut-turut');
+{
+  const handled = [];
+  const { api, loc, hist } = makeShareEnv('', handled);
+
+  // Share pertama.
+  loc.hash = '#u=' + encodeURIComponent('https://maps.google.com/?q=1,1');
+  api.handleHashChange();
+  check(handled.length === 1, 'share pertama diproses');
+
+  // Share kedua dengan link berbeda. Karena fragment pertama sudah dibersihkan
+  // lewat replaceState, hash yang baru ini tetap memicu hashchange.
+  loc.hash = '#u=' + encodeURIComponent('https://maps.google.com/?q=2,2');
+  api.handleHashChange();
+  check(handled.length === 2, 'share kedua juga diproses, dapat ' + handled.length);
+  check(handled[1] === 'https://maps.google.com/?q=2,2', 'link kedua benar');
+  check(hist.replaced === 2, 'fragment dibersihkan dua kali');
+}
+
+section('fragment tanpa link tidak dianggap share');
+{
+  const handled = [];
+  const { api } = makeShareEnv('#lain', handled);
+  check(api.consumeIncomingLink() === false, 'fragment lain diabaikan');
+  check(handled.length === 0, 'tidak ada handler yang dipanggil');
 }
 
 // ── storage rusak tidak boleh melempar ───────────────────────────────────
