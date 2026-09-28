@@ -38,7 +38,7 @@
 // VERSION tidak naik, HP tetap memakai manifest LAMA dari cache -- termasuk
 // manifest yang belum punya share_target -- sehingga aplikasi tidak muncul
 // di share sheet milik Google Maps.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const SHELL_CACHE = `esp32nav-shell-${VERSION}`;
 
 // Hanya file shell. Sengaja TIDAK memakai URL absolut supaya path tetap
@@ -61,8 +61,9 @@ const SHELL_ASSETS = [
   './src/map.js',
   './src/nav.js',
   './src/parse.js',
-  './src/route.js',
-  './src/share.js',
+    './src/route.js',
+    './src/resolve.js',
+    './src/share.js',
   './src/state.js',
   './src/store.js',
   './src/toast.js',
@@ -110,28 +111,138 @@ self.addEventListener('activate', (event) => {
 // di-install DAN sudah dibuka minimal sekali setelah install. Kalau belum,
 // Android membuka halaman kosong karena tidak ada yang menangani POST-nya.
 // Bookmarklet tetap menutupi kasus ini sebagai cadangan.
+
+/**
+ * Ambil URL pertama yang terlihat di dalam sepotong teks.
+ *
+ * Google Maps tidak selalu mengirim link sebagai satu-satunya isi `text`.
+ * Yang nyata dishare bisa "Monas\nhttps://maps.app.goo.gl/xyz" atau
+ * "Lihat di https://... , mampir besok". Jadi kita cari URL-nya, bukan
+ * menganggap seluruh string adalah link.
+ *
+ * Sengaja tidak dibatasi di sini: string pembatas hanya untuk memotong tanda baca
+ * yang jelas bukan bagian URL.
+ */
+const URL_IN_TEXT = /https?:\/\/[^\s"'<>\u0000-\u001f]+/i;
+
+function extractUrl(text) {
+  const m = String(text).match(URL_IN_TEXT);
+  return m ? m[0] : '';
+}
+
+/**
+ * Escape teks untuk disisipkan ke HTML.
+ *
+ * Isi payload share datang dari aplikasi lain, jadi dianggap tidak
+ * dipercaya. Tanpa escape, `"><img src=x onerror=...>` di dalam `text` akan
+ * dieksekusi sebagai HTML di origin yang sama dengan aplikasi — stored XSS.
+ * Halaman ini dirender di service worker, jadi ini satu-satunya halaman yang
+ * dirender di luar app shell.
+ */
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/**
+ * Halaman diagnosis untuk share yang tidak menghasilkan link.
+ *
+ * Versi lama membalas 204 tanpa body. Di Android itu muncul sebagai halaman
+ * putih kosong: user tidak tahu share-nya gagal, dan kita tidak punya data
+ * apa pun untuk menelusurinya. Halaman ini sengaja menampilkan APA YANG
+ * BENAR-BENAR DITERIMA, karena itu satu-satunya cara mencari tahu field mana
+ * yang sebenarnya dikirim Google Maps.
+ *
+ * Semua isinya di-escape; lihat catatan di esc().
+ */
+function diagnosisPage(entries, contentType, note) {
+  const rows = entries.length
+    ? entries.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')
+    : '<tr><td colspan="2"><i>(tidak ada field)</i></td></tr>';
+
+  return `<!doctype html>
+<html lang="id"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Share diterima, link tidak ditemukan</title>
+<style>
+  body{font:15px/1.5 system-ui,sans-serif;margin:0;padding:1.5rem;background:#111;color:#eee}
+  h1{font-size:1.1rem;margin:0 0 .3rem}
+  p{margin:0 0 1rem;color:#aaa;max-width:60ch}
+  a{color:#8ab4f8}
+  code{background:#222;padding:.1rem .3rem;border-radius:3px}
+  table{border-collapse:collapse;width:100%;font-size:13px;table-layout:fixed}
+  th,td{border:1px solid #333;padding:.4rem .5rem;text-align:left;vertical-align:top;
+       word-break:break-all;overflow-wrap:anywhere}
+  th{background:#1a1a1a;color:#aaa;font-weight:600;width:8rem}
+  pre{background:#1a1a1a;border:1px solid #333;padding:.6rem;border-radius:4px;
+      white-space:pre-wrap;word-break:break-all;font-size:12px;max-height:40vh;overflow:auto}
+</style></head><body>
+<h1>Share diterima, tapi link peta tidak ditemukan</h1>
+<p>${esc(note)}</p>
+<p>Payload yang benar-benar diterima:</p>
+<table><tr><th>Field</th><th>Nilai</th></tr>${rows}</table>
+<p style="margin-top:1rem">Content-Type: <code>${esc(contentType || '(kosong)')}</code></p>
+<p><a href="./">Buka aplikasi</a></p>
+</body></html>`;
+}
+
 async function handleShare(request) {
+  /** @type {[string, string][]} */
+  const entries = [];
+  const contentType = request.headers.get('content-type') || '';
   let link = '';
+  let note = 'Aplikasi hanya meneruskan share ke server bila link-nya berupa tautan Google Maps.';
+
   try {
     const fd = await request.formData();
-    // Google Maps mengirim tautan sebagai EXTRA_TEXT, jadi `text` adalah
-    // sumber utama. `url` dan `title` hanya cadangan.
-    link = fd.get('text') || fd.get('url') || fd.get('title') || '';
+    // Baca SEMUA field, bukan cuma `text`/`url`/`title`. Nama field yang
+    // dikirim Google Maps bisa berubah antar versi Android, dan penamaannya
+    // satu nama saja adalah alasan share bisa gagal tanpa jejak. Field
+    // pertama yang memuat URL yang menang, jadi urutan penamaan tidak penting.
+    for (const [key, value] of fd.entries()) {
+      if (typeof value !== 'string' || !value) continue;
+      entries.push([key, value]);
+      if (!link) link = extractUrl(value);
+    }
+    if (!link) {
+      note = 'Tidak ada field yang memuat tautan http/https. Kirim screenshot halaman ini ke Maintainer — isinya persis yang diterima server.';
+    }
   } catch {
-    // Body tidak bisa dibaca. Perlakukan sebagai share yang tidak berguna.
+    // Body tidak bisa dibaca sebagai formData. Coba sebagai teks supaya
+    // diagnosis tetap punya isi.
+    try {
+      const raw = await request.text();
+      if (raw) {
+        entries.push(['(body)', raw]);
+        link = extractUrl(raw);
+      }
+      note = 'Body tidak terbaca sebagai form data, tapi berhasil dibaca sebagai teks biasa.';
+    } catch {
+      note = 'Body POST tidak bisa dibaca sama sekali. Biasanya ini berarti service worker aktif tapi formData() ditolak browser.';
+    }
   }
 
-  // Hanya terima tautan yang memang peta. Share dari aplikasi lain bisa
-  // berisi teks sembarang, dan aplikasi ini tidak punya tempat menaruhnya.
-  if (!/^https?:\/\/([^/]*\.)?(google\.[a-z]{2,6}\/maps|maps\.google\.[a-z]{2,6}|maps\.app\.goo\.gl)/i.test(link.trim())) {
-    return new Response('', { status: 204 });
+  // Ada link → teruskan ke aplikasi lewat fragment, supaya aplikasi yang
+  // memutuskan sah atau tidak. Service worker TIDAK memvalidasi host: dia
+  // classic worker, tidak bisa meng-import allowlist dari src/parse.js, dan
+  // salinan aturan yang lebih longgar di sini justru jadi celah.
+  if (link) {
+    // Response.redirect butuh URL absolut, makanya dibungkus new URL.
+    return Response.redirect(
+      new URL('./#u=' + encodeURIComponent(link), self.location.origin).href,
+      302
+    );
   }
 
-  // Response.redirect butuh URL absolut, makanya dibungkus new URL.
-  return Response.redirect(
-    new URL('./#u=' + encodeURIComponent(link.trim()), self.location.origin).href,
-    302
-  );
+  // Tidak ada link. Versi lama membalas 204 di sini dan user melihat layar
+  // putih; sekarang halaman diagnostik supaya masalahnya bisa ditelusuri.
+  return new Response(diagnosisPage(entries, contentType, note), {
+    status: 200,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+  });
 }
 
 self.addEventListener('fetch', (event) => {

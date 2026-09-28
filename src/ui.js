@@ -6,6 +6,7 @@
 import { confirmEl, searchInput, suggestionsEl } from './dom.js';
 import { toast } from './toast.js';
 import { parseMapsLink } from './parse.js';
+import { resolveShortLink, looksLikeUrl, ResolveError } from './resolve.js';
 import { fetchSuggestions } from './geocode.js';
 import { selectDestination } from './route.js';
 // ══════════════════════════════════════════════
@@ -65,7 +66,7 @@ export function handleMapsInput(text) {
   if (res.ok) { showConfirm(res); return true; }
   if (res.reason === 'short-link') {
     hideConfirm();
-    toast('Link pendek tidak bisa dibaca. Pasang bookmark 🔗 di panel atas untuk kirim sekali-tap.');
+    expandAndRetry(String(text).trim());
     return true;
   }
   if (res.reason === 'needs-geocode' && res.name) {
@@ -74,7 +75,45 @@ export function handleMapsInput(text) {
     fetchSuggestions(res.name);
     return true;
   }
+  // Teks yang jelas berupa URL tapi bukan peta: jangan pernah diteruskan ke
+  // pencarian Nominatim. Mengirim "https://example.com/x" sebagai nama tempat
+  // menghasilkan request yang sia-sia dan mengotori suggestions dengan
+  // hasil yang tidak ada kaitannya.
+  if (looksLikeUrl(text)) {
+    hideConfirm();
+    toast('Tautan itu bukan tautan Google Maps.');
+    return true;
+  }
   return false; // teks biasa — biarkan jalur Nominatim yang sudah ada
+}
+
+/**
+ * Short link → minta server expand → parse ulang hasilnya.
+ *
+ * Sengaja async terpisah dari handleMapsInput: pemanggilnya (paste handler,
+ * hashchange) butuh nilai balik sinkron untuk memutuskan preventDefault(),
+ * dan menunggu round-trip jaringan di sana akan membekukan UI.
+ *
+ * Kegagalan tidak pernah diam: user tetap diberi tahu kenapa, dan tetap
+ * diberi jalan keluar lewat bookmarklet, karena server bisa mati atau
+ * captive portal bisa memblokirnya.
+ */
+async function expandAndRetry(shortLink) {
+  // toast() tidak mengembalikan handle, hanya menimpa pesan yang sedang
+  // tampil. Jadi pesan "memuat" ini akan berganti sendiri begitu hasil atau
+  // error tiba — tidak perlu dibersihkan manual.
+  toast('Membuka short link…');
+  try {
+    const expanded = await resolveShortLink(shortLink);
+    // Parse ulang lewat pintu yang sama supaya validasi, label "persis vs
+    // perkiraan", dan baris konfirmasi berlaku persis seperti link biasa.
+    handleMapsInput(expanded);
+  } catch (err) {
+    const reason = err instanceof ResolveError ? err : null;
+    toast(reason && !reason.offline
+      ? reason.userMessage
+      : 'Short link tidak bisa dibuka. Server mungkin sedang tidak aktif — pakai bookmark 🔗 di panel atas.');
+  }
 }
 
 /**

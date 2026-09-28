@@ -444,6 +444,114 @@ section('readIncomingLink');
   location.hash = '';
 }
 
+// ══════════════════════════════════════════════
+//  Resolver short link ( sisi client )
+// ══════════════════════════════════════════════
+{
+  const resolve_ = await load('src/resolve.js');
+
+  // Respons server palsu. fetchImpl disuntikkan, jadi tidak ada request
+  // sungguhan yang keluar dari test.
+  const stub = (status, body) => async () => ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  });
+
+  section('resolve: berhasil');
+  {
+    const dest = 'https://www.google.com/maps/place/Monas/@-6.175,106.827,17z';
+    let askedFor = '';
+    const got = await resolve_.resolveShortLink('https://maps.app.goo.gl/abc', {
+      fetchImpl: async (u) => { askedFor = u; return { ok: true, status: 200, json: async () => ({ ok: true, url: dest }) }; },
+    });
+    check(got === dest, 'URL tujuan dikembalikan utuh');
+    check(askedFor.includes('/api/expand'), 'memanggil /api/expand, dapat ' + askedFor);
+    check(askedFor.includes('url=https%3A%2F%2Fmaps.app.goo.gl%2Fabc'),
+      'short link di-encode sebagai query, dapat ' + askedFor);
+  }
+
+  section('resolve: penolakan server');
+  for (const [reason, expectMsg] of [
+    ['host-not-allowed', true],
+    ['too-many-hops', true],
+    ['not-https', true],
+    ['reason-yang-tidak-dikenal', false],   // jatuh ke pesan default
+  ]) {
+    let thrown = null;
+    try {
+      await resolve_.resolveShortLink('https://maps.app.goo.gl/a', { fetchImpl: stub(422, { ok: false, reason }) });
+    } catch (e) { thrown = e; }
+    check(thrown instanceof resolve_.ResolveError, reason + ' → lempar ResolveError');
+    if (thrown) {
+      check(thrown.reason === reason, reason + ' → reason asli dipertahankan');
+      check(thrown.offline === false, reason + ' → ditandai bukan masalah jaringan');
+      check(Boolean(thrown.userMessage) === true, reason + ' → ada pesan untuk user');
+      if (!expectMsg) check(thrown.userMessage === 'Tautan tidak bisa dibuka.',
+        reason + ' → alasan tak dikenal dapat pesan default');
+    }
+  }
+
+  section('resolve: kegagalan jaringan');
+  {
+    let thrown = null;
+    try {
+      await resolve_.resolveShortLink('https://maps.app.goo.gl/a', {
+        fetchImpl: async () => { throw new TypeError('Failed to fetch'); },
+      });
+    } catch (e) { thrown = e; }
+    check(thrown instanceof resolve_.ResolveError, 'jaringan putus → ResolveError');
+    check(thrown && thrown.offline === true, 'ditandai sebagai masalah jaringan');
+    // Pesan "pakai bookmarklet" TIDAK diuji di sini karena itu keputusan UI,
+    // bukan transport: resolve.js melaporkan gagalnya apa adanya, dan ui.js
+    // yang memilih saran pemulihan lewat flag `offline`. Yang diuji di sini
+    // adalah flag itu, karena itulah yang驱动 cabang UI.
+    check(thrown && thrown.userMessage === 'Server tidak bisa menghubungi Google.',
+      'pesan jujur, tanpa saran yang tidak ada hubungannya, dapat: ' + (thrown && thrown.userMessage));
+  }
+
+  section('resolve: server membalas non-JSON');
+  {
+    let thrown = null;
+    try {
+      await resolve_.resolveShortLink('https://maps.app.goo.gl/a', {
+        fetchImpl: async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token <'); } }),
+      });
+    } catch (e) { thrown = e; }
+    check(thrown instanceof resolve_.ResolveError && thrown.offline === true,
+      'halaman error proxy diperlakukan sebagai masalah jaringan');
+  }
+
+  section('resolve: timeout client');
+  {
+    let thrown = null;
+    try {
+      await resolve_.resolveShortLink('https://maps.app.goo.gl/a', {
+        timeoutMs: 5,
+        // Fetch yang tidak pernah menjawab, tapi meng-abort saat sinyal ditolak.
+        fetchImpl: (_u, o) => new Promise((_res, rej) => {
+          o.signal.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')));
+        }),
+      });
+    } catch (e) { thrown = e; }
+    check(thrown instanceof resolve_.ResolveError, 'timeout → ResolveError');
+    check(thrown && thrown.offline === true, 'timeout ditandai sebagai masalah jaringan');
+  }
+
+  section('resolve: looksLikeUrl');
+  for (const [text, want] of [
+    ['https://maps.app.goo.gl/abc', true],
+    ['http://example.com/x', true],
+    ['  https://example.com/x  ', true],
+    ['Monas, Jakarta', false],
+    ['halo apa kabar', false],
+    ['', false],
+    ['ftp://example.com', false],
+  ]) {
+    check(resolve_.looksLikeUrl(text) === want, `looksLikeUrl(${JSON.stringify(text)}) = ${want}`);
+  }
+}
+
 console.log('\n─────────────────────────────');
 console.log('PASS: ' + pass + '   FAIL: ' + fail);
 process.exit(fail === 0 ? 0 : 1);

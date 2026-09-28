@@ -163,19 +163,27 @@ check(typeof sw.handlers.install === 'function',
 check(typeof sw.handlers.activate === 'function',
   'sw.js mendaftarkan handler activate');
 
-async function fireFetch(url, { mode = 'cors', method = 'GET', body = null } = {}) {
+async function fireFetch(url, { mode = 'cors', method = 'GET', body = null, formDataThrows = false } = {}) {
   const beforeWrites = sw.cacheWrites.length;
   const beforeNet = sw.netCalls.length;
   let responded = false;
   let respondPromise = null;
   let resolved = null;
-  // Share target dibaca lewat request.formData(). Map sudah punya .get(),
-  // jadi bentuknya cukup sama dengan FormData untuk keperluan test.
+  // Share target dibaca lewat request.formData(). Map sudah punya .get() dan
+  // .entries(), jadi bentuknya cukup sama dengan FormData untuk keperluan
+  // test.
+  //
+  // headers dan text() WAJIB ada: handleShare membaca content-type untuk
+  // halaman diagnosis, dan jatuh ke text() kalau formData() gagal. Tanpa
+  // keduanya, test menguji Request yang tidak pernah terjadi di browser —
+  // dan-suite ini sempat melaporkan 9 kegagalan palsu karena itu.
   const form = new Map(Object.entries(body || {}));
   const event = {
     request: {
       url, mode, method,
-      formData: async () => form,
+      headers: new Headers(body === null ? {} : { 'content-type': 'application/x-www-form-urlencoded' }),
+      formData: async () => { if (formDataThrows) throw new TypeError('mock: formData gagal'); return form; },
+      text: async () => (formDataThrows ? 'isi mentah' : Object.entries(body || {}).map(([k, v]) => `${k}=${v}`).join('&')),
     },
     respondWith(p) { responded = true; respondPromise = p; },
     waitUntil(p) { Promise.resolve(p).catch(() => {}); },
@@ -280,15 +288,88 @@ const SHARE_PATH = '/share-target';
     'share: short link maps.app.goo.gl ikut diterima');
 }
 
-// --- 3h. share target: teks yang bukan peta ditolak
-for (const junk of ['halo apa kabar', 'https://example.com/bukan-peta',
-                    'https://google.com.evil.example/maps/x']) {
+// --- 3h. share tanpa URL: halaman diagnosis, bukan layar putih
+//
+// PERUBAHAN PERILAKU (v3). Dulu service worker memvalidasi host-nya sendiri
+// dengan regex, dan apa pun yang tidak cocok dibalas 204 tanpa body — yang di
+// Android muncul sebagai layar putih kosong. Sekarang validitas host deciding
+// aplikasi (src/parse.js), karena SW adalah classic worker yang tidak bisa
+// meng-import allowlist itu, dan salinan yang lebih longgar justru jadi celah.
+// Yang tetap sama: share tanpa URL tidak boleh dialihkan.
+for (const junk of ['halo apa kabar', '', '   ', 'cuma teks tanpa tautan']) {
   const r = await fireFetch(`${ORIGIN}${SHARE_PATH}`, {
     method: 'POST', mode: 'navigate', body: { text: junk },
   });
-  check(r.responded, `share: SW tetap menangani share "${junk.slice(0, 20)}"`);
+  const label = junk.slice(0, 20) || '(kosong)';
+  check(r.responded, `share: SW tetap menangani share "${label}"`);
   check(r.resolved && r.resolved.redirected !== true,
-    `share: "${junk.slice(0, 20)}" tidak dialihkan ke app navigasi`);
+    `share: "${label}" tidak dialihkan ke app navigasi`);
+  check(r.resolved && r.resolved.status === 200,
+    `share: "${label}" dibalas halaman, bukan 204 senyap`);
+}
+
+// --- 3h2. URL non-peta sekarang diteruskan, keputusan ada di aplikasi
+for (const url of ['https://example.com/bukan-peta', 'https://google.com.evil.example/maps/x']) {
+  const r = await fireFetch(`${ORIGIN}${SHARE_PATH}`, {
+    method: 'POST', mode: 'navigate', body: { text: url },
+  });
+  check(r.resolved && r.resolved.redirected === true,
+    `share: URL non-peta diteruskan ke aplikasi untuk dinilai: ${url}`);
+  check(decodeURIComponent((r.resolved.url || '').split('#u=')[1] || '') === url,
+    `share: URL diteruskan utuh: ${url}`);
+}
+
+// --- 3h3. URL di field yang tidak bernama `text`
+// Nama field yang dikirim Google Maps bisa berubah. Handler harus mencari
+// URL di semua field, bukan cuma tiga nama yang biasa.
+for (const key of ['android.intent.extra.TEXT', 'SmsManager', 'x', 'title', 'text']) {
+  const link = 'https://maps.app.goo.gl/f-' + key.length;
+  const r = await fireFetch(`${ORIGIN}${SHARE_PATH}`, {
+    method: 'POST', mode: 'navigate', body: { [key]: link },
+  });
+  check(r.resolved && r.resolved.redirected === true, `share: field "${key}" tetap dibaca`);
+  check(decodeURIComponent((r.resolved.url || '').split('#u=')[1] || '') === link,
+    `share: field "${key}" meneruskan link yang benar`);
+}
+
+// --- 3h4. link yang menempel pada teks lain
+{
+  const link = 'https://maps.app.goo.gl/abc';
+  const r = await fireFetch(`${ORIGIN}${SHARE_PATH}`, {
+    method: 'POST', mode: 'navigate',
+    body: { text: `Monas\n${link}\nlihat ya` },
+  });
+  check(r.resolved && r.resolved.redirected === true, 'share: link di dalam teks panjang ikut diambil');
+  check(decodeURIComponent((r.resolved.url || '').split('#u=')[1] || '') === link,
+    'share: hanya URL-nya yang diambil, bukan seluruh teks');
+}
+
+// --- 3h5. halaman diagnosis meng-escape payload (stored XSS)
+{
+  const xss = '"><img src=x onerror=alert(1)>';
+  const r = await fireFetch(`${ORIGIN}${SHARE_PATH}`, {
+    method: 'POST', mode: 'navigate', body: { text: xss },
+  });
+  const body = String((r.resolved && r.resolved.body) || '');
+  check(body.length > 0, 'diagnosis: body tidak kosong');
+  check(!body.includes('<img'), 'diagnosis: tag HTML dari payload di-escape');
+  check(body.includes('&lt;img'), 'diagnosis: tanda < jadi &lt;');
+  check(body.includes('&quot;'), 'diagnosis: tanda " jadi &quot;');
+  // Properti yang benar adalah payload mentah tidak boleh muncul utuh:
+  // string 'onerror=alert' boleh ada sebagai TEKS, yang berbahaya adalah
+  // kalau '<' tidak ter-escape sehingga tag-nya benar-benar terbentuk.
+  check(!body.includes(xss), 'diagnosis: payload mentah tidak muncul utuh di HTML');
+}
+
+// --- 3h6. formData() gagal: tetap harus dapat diagnostik
+{
+  const r = await fireFetch(`${ORIGIN}${SHARE_PATH}`, {
+    method: 'POST', mode: 'navigate', body: { text: 'x' }, formDataThrows: true,
+  });
+  check(r.responded, 'share: formData() gagal tetap ditangani');
+  check(r.resolved && r.resolved.redirected !== true, 'share: fallback text() tidak menemukan URL');
+  check(String((r.resolved && r.resolved.body) || '').includes('isi mentah'),
+    'diagnosis: isi dari fallback text() ikut ditampilkan');
 }
 
 // --- 3i. share target: body tidak terbaca harus aman
