@@ -105,15 +105,45 @@ Kolom pencarian menerima **link Google Maps** secara langsung. Ini cara paling
 andal untuk tujuan yang tidak ketemu lewat pencarian biasa, karena koordinatnya
 diambil langsung dari pin Google — bukan diterka dari database geocoder.
 
-1. Di Google Maps, pilih lokasi → **Share** → **Copy link**
-2. Paste ke kolom pencarian di aplikasi ini
-3. Muncul baris konfirmasi berisi nama, koordinat, dan label
+Baris konfirmasi sengaja tidak langsung merute: aplikasi ini dipakai sambil
+mengendarai, jadi tujuan yang salah harus dicek mata dulu.
+
+#### Cara utama: Share dari Google Maps
+
+1. Di Google Maps, pilih lokasi → **Share**
+2. Pilih **ESP-Nav** dari daftar share sheet Android
+3. Aplikasi terbuka sendiri dan baris konfirmasi langsung muncul:
    - **persis** — koordinat diambil dari pin asli (`!3d/!4d`)
    - **perkiraan — pusat layar Google Maps** — hanya pusat layar, bisa jauh dari pin
 4. Tap **Pakai tujuan ini**
 
-Baris konfirmasi sengaja tidak langsung merute: aplikasi ini dipakai sambil
-mengendarai, jadi tujuan yang salah harus dicek mata dulu.
+Tidak ada copy-paste sama sekali. Link-nya ditangkap service worker saat
+dibaca, lalu diteruskan lewat fragment `#u=` — jadi **tidak pernah sampai ke
+server** dan tidak muncul di access log.
+
+**Dua syarat yang wajib dipenuhi:**
+
+- Aplikasi sudah **ter-install**, karena share target hanya muncul untuk PWA
+  yang sudah terpasang.
+- Aplikasi sudah **dibuka minimal sekali** setelah install. Chrome hanya
+  mengaktifkan service worker setelah halaman pertama selesai dimuat, dan
+  share target butuh SW yang sudah aktif. Kalau Share masih membuka halaman
+  kosong, buka aplikasinya sekali, tutup, lalu coba lagi.
+
+Kalau Share tidak muncul — iOS tidak mendukungnya sama sekali, atau kamu
+share dari browser — pakai jalur cadangan di bawah.
+
+#### Cadangan: Copy link lalu paste
+
+1. Di Google Maps, pilih lokasi → **Share** → **Copy link**
+2. Paste ke kolom pencarian di aplikasi ini
+3. Muncul baris konfirmasi → tap **Pakai tujuan ini**
+
+#### Cadangan terakhir: bookmarklet
+
+Kalau tautannya berupa tautan pendek, copy-paste biasa tidak bisa mem-parse-nya
+(jelaskanannya di bawah). Jalur terakhir: **Share → Copy link** di Maps,
+lalu jalankan bookmarklet.
 
 #### Link pendek (`maps.app.goo.gl/…`)
 

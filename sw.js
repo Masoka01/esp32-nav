@@ -71,15 +71,62 @@ self.addEventListener('activate', (event) => {
   })());
 });
 
+// ══════════════════════════════════════════════
+//  Share target: terima tujuan dari Google Maps
+// ══════════════════════════════════════════════
+//
+// Saat user tap Share di Google Maps lalu memilih aplikasi ini, Android
+// mengirim POST ke action yang dideklarasikan di manifest. Tanpa handler di
+// sini, POST itu akan benar-benar mendarat di server dan mengembalikan 405.
+//
+// Tangkapan ini terjadi di service worker, jadi link tujuan TIDAK PERNAH
+// sampai ke server. Balasannya redirect ke fragment #u=, sama seperti
+// bookmarklet: link tidak masuk query string dan tidak muncul di access log.
+//
+// Hanya berlaku kalau service worker sudah aktif, artinya aplikasi sudah
+// di-install DAN sudah dibuka minimal sekali setelah install. Kalau belum,
+// Android membuka halaman kosong karena tidak ada yang menangani POST-nya.
+// Bookmarklet tetap menutupi kasus ini sebagai cadangan.
+async function handleShare(request) {
+  let link = '';
+  try {
+    const fd = await request.formData();
+    // Google Maps mengirim tautan sebagai EXTRA_TEXT, jadi `text` adalah
+    // sumber utama. `url` dan `title` hanya cadangan.
+    link = fd.get('text') || fd.get('url') || fd.get('title') || '';
+  } catch {
+    // Body tidak bisa dibaca. Perlakukan sebagai share yang tidak berguna.
+  }
+
+  // Hanya terima tautan yang memang peta. Share dari aplikasi lain bisa
+  // berisi teks sembarang, dan aplikasi ini tidak punya tempat menaruhnya.
+  if (!/^https?:\/\/([^/]*\.)?(google\.[a-z]{2,6}\/maps|maps\.google\.[a-z]{2,6}|maps\.app\.goo\.gl)/i.test(link.trim())) {
+    return new Response('', { status: 204 });
+  }
+
+  // Response.redirect butuh URL absolut, makanya dibungkus new URL.
+  return Response.redirect(
+    new URL('./#u=' + encodeURIComponent(link.trim()), self.location.origin).href,
+    302
+  );
+}
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-
-  // Hanya GET yang bisa di-cache. POST/HEAD dilewati tanpa sentuhan.
-  if (request.method !== 'GET') return;
-
   const url = new URL(request.url);
 
-  // === ATURAN 1: lintas-origin SELALU network-only ===
+  // ═══ ATURAN 0: share target ═══
+  // Hanya POST ke path share-target. POST lain tetap jatuh ke network.
+  if (request.method === 'POST' && url.pathname.endsWith('/share-target')) {
+    event.respondWith(handleShare(request));
+    return;
+  }
+
+  // Hanya GET yang bisa di-cache. POST/HEAD yang tidak tertangkap di atas
+  // dilewati tanpa sentuhan, supaya tidak ikut dilayani aturan cache.
+  if (request.method !== 'GET') return;
+
+  // ═══ ATURAN 1: lintas-origin SELALU network-only ═══
   // Inilah yang melindungi OSRM, tile, dan Nominatim. Tidak ada satu pun
   // request ke host lain yang bisa masuk cache.
   if (url.origin !== self.location.origin) return;

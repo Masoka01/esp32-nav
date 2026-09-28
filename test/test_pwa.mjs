@@ -135,7 +135,12 @@ function loadSw() {
     self,
     caches: cacheApi,
     URL,
-    Response: class { constructor(b, o) { this.body = b; this.o = o; } },
+    // sw.js memakai Response.redirect() untuk membalas share target, jadi
+    // stub-nya wajib punya static method itu juga.
+    Response: class {
+      constructor(b, o) { this.body = b; this.o = o; this.status = (o && o.status) || 200; }
+      static redirect(url, status = 302) { return { redirected: true, url, status }; }
+    },
     console,
     fetch: async (req) => {
       netCalls.push(typeof req === 'string' ? req : req.url);
@@ -158,13 +163,20 @@ check(typeof sw.handlers.install === 'function',
 check(typeof sw.handlers.activate === 'function',
   'sw.js mendaftarkan handler activate');
 
-async function fireFetch(url, { mode = 'cors', method = 'GET' } = {}) {
+async function fireFetch(url, { mode = 'cors', method = 'GET', body = null } = {}) {
   const beforeWrites = sw.cacheWrites.length;
   const beforeNet = sw.netCalls.length;
   let responded = false;
   let respondPromise = null;
+  let resolved = null;
+  // Share target dibaca lewat request.formData(). Map sudah punya .get(),
+  // jadi bentuknya cukup sama dengan FormData untuk keperluan test.
+  const form = new Map(Object.entries(body || {}));
   const event = {
-    request: { url, mode, method },
+    request: {
+      url, mode, method,
+      formData: async () => form,
+    },
     respondWith(p) { responded = true; respondPromise = p; },
     waitUntil(p) { Promise.resolve(p).catch(() => {}); },
   };
@@ -175,11 +187,12 @@ async function fireFetch(url, { mode = 'cors', method = 'GET' } = {}) {
   // sini, assertion berjalan duluan dan selalu melaporkan "tidak ada
   // penulisan cache" padahal cache.put-nya memang dipanggil.
   if (respondPromise) {
-    try { await respondPromise; } catch { /* fallback offline, tidak relevan */ }
+    try { resolved = await respondPromise; } catch { /* fallback offline, tidak relevan */ }
   }
 
   return {
     responded,
+    resolved,
     wroteSomething: sw.cacheWrites.length > beforeWrites,
     hitNetwork: sw.netCalls.length > beforeNet,
     writes: sw.cacheWrites.slice(beforeWrites),
@@ -217,6 +230,80 @@ for (const rel of ['manifest.json', 'icons/icon-192.png', 'icons/icon-512.png'])
   const r = await fireFetch(`${ORIGIN}/api`, { method: 'POST' });
   check(!r.responded, 'POST: dilewati, tidak boleh di-cache');
   check(!r.wroteSomething, 'POST: tidak menulis cache');
+}
+
+// --- 3e. share target: POST dari Android
+// Android mengirim POST ke action dari manifest saat user memilih aplikasi ini
+// di share sheet. SW harus menangkapnya dan mengarahkan ke fragment, supaya
+// link tujuan tidak pernah sampai ke server.
+const SHARE_PATH = '/share-target';
+
+{
+  const link = 'https://www.google.com/maps/place/Monas/@-6.1753,106.8248,17z';
+  const r = await fireFetch(`${ORIGIN}${SHARE_PATH}`, {
+    method: 'POST', mode: 'navigate',
+    body: { text: link, title: 'Monas' },
+  });
+
+  check(r.responded, 'share: SW menangani POST share target');
+  check(r.resolved && r.resolved.redirected === true,
+    'share: membalas dengan redirect, bukan halaman');
+
+  const loc = (r.resolved && r.resolved.url) || '';
+  check(loc.includes('#u='), 'share: redirect menuju fragment #u=');
+  check(!loc.includes('?u='),
+    'share: link tujuan TIDAK boleh di query string (bocor ke access log)');
+  check(decodeURIComponent(loc.split('#u=')[1] || '') === link,
+    'share: link tujuan utuh setelah di-decode');
+  check(!r.wroteSomething, 'share: tidak menulis cache');
+  check(!r.hitNetwork, 'share: link TIDAK boleh requesting server');
+}
+
+// --- 3f. share target: memprioritaskan `text` (Maps kirim link di EXTRA_TEXT)
+{
+  const link = 'https://maps.app.goo.gl/abc123';
+  const r = await fireFetch(`${ORIGIN}${SHARE_PATH}`, {
+    method: 'POST', mode: 'navigate',
+    body: { text: link, url: 'https://example.com/harus-diabaikan' },
+  });
+  const got = decodeURIComponent(((r.resolved && r.resolved.url) || '').split('#u=')[1] || '');
+  check(got === link, 'share: `text` menang atas `url`');
+}
+
+// --- 3g. share target: short link juga diterima
+{
+  const link = 'https://maps.app.goo.gl/xyz789';
+  const r = await fireFetch(`${ORIGIN}${SHARE_PATH}`, {
+    method: 'POST', mode: 'navigate', body: { text: link },
+  });
+  check((r.resolved && r.resolved.redirected) === true,
+    'share: short link maps.app.goo.gl ikut diterima');
+}
+
+// --- 3h. share target: teks yang bukan peta ditolak
+for (const junk of ['halo apa kabar', 'https://example.com/bukan-peta',
+                    'https://google.com.evil.example/maps/x']) {
+  const r = await fireFetch(`${ORIGIN}${SHARE_PATH}`, {
+    method: 'POST', mode: 'navigate', body: { text: junk },
+  });
+  check(r.responded, `share: SW tetap menangani share "${junk.slice(0, 20)}"`);
+  check(r.resolved && r.resolved.redirected !== true,
+    `share: "${junk.slice(0, 20)}" tidak dialihkan ke app navigasi`);
+}
+
+// --- 3i. share target: body tidak terbaca harus aman
+{
+  const r = await fireFetch(`${ORIGIN}${SHARE_PATH}`, { method: 'POST', mode: 'navigate' });
+  check(r.responded, 'share: body kosong tetap ditangani tanpa melempar error');
+  check(r.resolved && r.resolved.redirected !== true,
+    'share: body kosong tidak dialihkan');
+}
+
+// --- 3j. POST di luar share-target tidak ikut tertangkap
+{
+  const r = await fireFetch(`${ORIGIN}/index.html`, { method: 'POST' });
+  check(!r.responded,
+    'share: handler hanya berlaku untuk path share-target, bukan semua POST');
 }
 
 // ══════════════════════════════════════════════
