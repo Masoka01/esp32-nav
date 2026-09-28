@@ -215,115 +215,165 @@ int xQueueSend(QueueHandle_t h, const void* item, TickType_t);
 int xQueueReceive(QueueHandle_t h, void* buf, TickType_t);
 
 // ==========================================================================
-//  BLE (cukup untuk kompilasi dan uji framing)
+//  NimBLE (cukup untuk kompilasi dan uji framing)
 // ==========================================================================
-class BLEDescriptor { public: virtual ~BLEDescriptor() {} };
-class BLE2902 : public BLEDescriptor { public: bool getNotifications() { return true; } };
+// Stub ini mencerminkan API NimBLE-Arduino 2.x, BUKAN Bluedroid. Bentuknya
+// sengaja ditiru: nilai ditulis dibungkus NimBLEAttValue, dan setiap
+// callback koneksi menerima NimBLEConnInfo&. Kalau stub ini melenceng dari
+// API asli, test tetap hijau tapi firmware gagal compile di Arduino IDE --
+// itu bahaya yang paling mahal, karena baru ketahuan saat flash ke board.
 
-class BLECharacteristic;
-
-class BLECharacteristicCallbacks {
+class NimBLEConnInfo {
  public:
-  virtual ~BLECharacteristicCallbacks() {}
-  virtual void onRead(BLECharacteristic*) {}
-  virtual void onWrite(BLECharacteristic*) {}
-  virtual void onNotify(BLECharacteristic*) {}
-  void onWrite(BLECharacteristic* p, void*) { onWrite(p); }
+  uint16_t getConnHandle() const { return 1; }
 };
 
-class BLECharacteristic {
+class NimBLEUUID {
  public:
-  static const uint32_t PROPERTY_READ     = 1 << 0;
-  static const uint32_t PROPERTY_WRITE    = 1 << 1;
-  static const uint32_t PROPERTY_NOTIFY   = 1 << 2;
-  static const uint32_t PROPERTY_INDICATE  = 1 << 4;
-  static const uint32_t PROPERTY_WRITE_NR = 1 << 5;
+  NimBLEUUID() : uuid_("") {}
+  explicit NimBLEUUID(const char* u) : uuid_(u ? u : "") {}
+  std::string toString() const { return std::string(uuid_); }
 
-  BLECharacteristic(const char* uuid, uint32_t props) : uuid_(uuid), props_(props) {}
+ private:
+  const char* uuid_;
+};
+
+// Nilai atribut BLE. Firmware membaca lewat data() + length(), bukan
+// c_str(), supaya byte di luar 7-bit (nama jalan Indonesia) tidak rusak.
+class NimBLEAttValue {
+ public:
+  NimBLEAttValue() = default;
+  const uint8_t* data() const { return buf_.empty() ? nullptr : buf_.data(); }
+  uint16_t length() const { return (uint16_t)buf_.size(); }
+  uint16_t size() const { return (uint16_t)buf_.size(); }
+  bool setValue(const uint8_t* v, uint16_t len) {
+    if (!v) { buf_.clear(); return false; }
+    buf_.assign(v, v + len);
+    return true;
+  }
+
+ private:
+  std::vector<uint8_t> buf_;
+};
+
+// Di NimBLE 2.x flag properti pindah dari BLECharacteristic::PROPERTY_*
+// ke enum NIMBLE_PROPERTY.
+struct NIMBLE_PROPERTY {
+  static constexpr uint32_t READ     = 1 << 0;
+  static constexpr uint32_t WRITE    = 1 << 1;
+  static constexpr uint32_t NOTIFY   = 1 << 2;
+  static constexpr uint32_t INDICATE  = 1 << 4;
+  static constexpr uint32_t WRITE_NR = 1 << 5;
+};
+
+class NimBLECharacteristic;
+
+class NimBLECharacteristicCallbacks {
+ public:
+  virtual ~NimBLECharacteristicCallbacks() {}
+  virtual void onRead(NimBLECharacteristic*, NimBLEConnInfo&) {}
+  virtual void onWrite(NimBLECharacteristic*, NimBLEConnInfo&) {}
+  virtual void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo&, uint16_t) {}
+};
+
+class NimBLECharacteristic {
+ public:
+  NimBLECharacteristic(const char* uuid, uint32_t props) : uuid_(uuid), props_(props) {}
   // Sengaja TIDAK menghapus cb_: pada BLE asli, callback dimiliki aplikasi
   // dan harus hidup selama server aktif. Menghapus ptr yang menunjuk objek
   // stack milik test akan jadi free() ilegal.
 
-  void setCallbacks(BLECharacteristicCallbacks* cb) { cb_ = cb; }
-  void addDescriptor(BLEDescriptor*) {}
-  void setValue(const uint8_t*, size_t) {}
-
-  uint8_t* getData() { return buf_.empty() ? nullptr : buf_.data(); }
-  size_t getLength() const { return buf_.size(); }
+  void setCallbacks(NimBLECharacteristicCallbacks* cb) { cb_ = cb; }
+  const NimBLEAttValue& getValue() const { return val_; }
   uint32_t getProperties() const { return props_; }
+  NimBLEUUID getUUID() const { return NimBLEUUID(uuid_); }
 
   // Hanya untuk test: isi nilai lalu panggil onWrite seperti BLE sungguhan.
   void simulateWrite(const std::string& payload) {
-    buf_.assign(payload.begin(), payload.end());
-    if (cb_) cb_->onWrite(this);
+    val_.setValue(reinterpret_cast<const uint8_t*>(payload.data()),
+                  (uint16_t)payload.size());
+    if (cb_) {
+      NimBLEConnInfo ci;
+      cb_->onWrite(this, ci);
+    }
   }
 
  private:
   const char* uuid_;
   uint32_t props_;
-  BLECharacteristicCallbacks* cb_ = nullptr;
-  std::vector<uint8_t> buf_;
+  NimBLECharacteristicCallbacks* cb_ = nullptr;
+  NimBLEAttValue val_;
 };
 
-class BLEServer;
+class NimBLEServer;
 
-class BLEServerCallbacks {
+class NimBLEServerCallbacks {
  public:
-  virtual ~BLEServerCallbacks() {}
-  virtual void onConnect(BLEServer*) {}
-  virtual void onDisconnect(BLEServer*) {}
+  virtual ~NimBLEServerCallbacks() {}
+  virtual void onConnect(NimBLEServer*, NimBLEConnInfo&) {}
+  virtual void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) {}
 };
 
-class BLEService {
+class NimBLEService {
  public:
-  explicit BLEService(const char* uuid) : uuid_(uuid) {}
-  ~BLEService() { for (auto* c : chars_) delete c; }
-  BLECharacteristic* createCharacteristic(const char* uuid, uint32_t props) {
-    BLECharacteristic* c = new BLECharacteristic(uuid, props);
+  explicit NimBLEService(const char* uuid) : uuid_(uuid) {}
+  ~NimBLEService() { for (auto* c : chars_) delete c; }
+  NimBLECharacteristic* createCharacteristic(const char* uuid, uint32_t props) {
+    NimBLECharacteristic* c = new NimBLECharacteristic(uuid, props);
     chars_.push_back(c);
     return c;
   }
   void start() {}
+  NimBLEUUID getUUID() const { return NimBLEUUID(uuid_); }
 
  private:
   const char* uuid_;
-  std::vector<BLECharacteristic*> chars_;
+  std::vector<NimBLECharacteristic*> chars_;
 };
 
-class BLEServer {
+class NimBLEServer {
  public:
-  void setCallbacks(BLEServerCallbacks* cb) { cb_ = cb; }
-  BLEService* createService(const char* uuid) { return new BLEService(uuid); }
+  void setCallbacks(NimBLEServerCallbacks* cb) { cb_ = cb; }
+  NimBLEService* createService(const char* uuid) { return new NimBLEService(uuid); }
 
   // Pemicu event dari sisi stub. Memakai jalur callback yang sama dengan
   // BLE sungguhan, jadi kelas callback firmware bisa diuji tanpa membuka
   // akses private-nya.
-  void fireConnect()    { if (cb_) cb_->onConnect(this); }
-  void fireDisconnect() { if (cb_) cb_->onDisconnect(this); }
+  void fireConnect() {
+    if (cb_) { NimBLEConnInfo ci; cb_->onConnect(this, ci); }
+  }
+  void fireDisconnect() {
+    if (cb_) { NimBLEConnInfo ci; cb_->onDisconnect(this, ci, 0); }
+  }
 
  private:
-  BLEServerCallbacks* cb_ = nullptr;
+  NimBLEServerCallbacks* cb_ = nullptr;
 };
 
-class BLEAdvertising {
+// setName() sengaja ada di stub meski firmware tidak pernah membacanya:
+// NimBLE 2.x tidak lagi mengirim nama perangkat di packet advertising, jadi
+// tanpa setName() Chrome tidak akan bisa memfilter device berdasarkan nama.
+// Stub ini tidak bisa membuktikan itu -- hanya board asli bisa.
+class NimBLEAdvertising {
  public:
-  void addServiceUUID(const char*) {}
-  void setScanResponse(bool) {}
-  void setMinPreferred(int) {}
+  void setName(const char*) {}
+  void addServiceUUID(const NimBLEUUID&) {}
+  void enableScanResponse(bool) {}
+  void start() {}
 };
 
-class BLEDevice {
+class NimBLEDevice {
  public:
-  static bool init(String = "") { return true; }
+  static bool init(const char* = "") { return true; }
 
   // Server & characteristic terakhir yang dibuat setup() firmware, supaya
   // test bisa memicu event tanpa perlu membuat ulang sendiri.
-  static BLEServer* lastServer() { return server_; }
-  static BLEServer* createServer() { server_ = new BLEServer(); return server_; }
-  static BLEAdvertising* getAdvertising() { static BLEAdvertising a; return &a; }
+  static NimBLEServer* lastServer() { return server_; }
+  static NimBLEServer* createServer() { server_ = new NimBLEServer(); return server_; }
+  static NimBLEAdvertising* getAdvertising() { static NimBLEAdvertising a; return &a; }
   static void startAdvertising() {}
 
  private:
-  static BLEServer* server_;
+  static NimBLEServer* server_;
 };
-inline BLEServer* BLEDevice::server_ = nullptr;
+inline NimBLEServer* NimBLEDevice::server_ = nullptr;

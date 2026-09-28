@@ -121,7 +121,7 @@ int main() {
     // Feed payload dalam chunk 20 byte, sama seperti characteristic.write()
     // di web. loop() dipanggil setelah tiap chunk, seperti task loop di device.
     CharCallbacks cb;
-    BLECharacteristic ch("", 0);
+    NimBLECharacteristic ch("", 0);
     ch.setCallbacks(&cb);
     for (size_t off = 0; off < bytes.size(); off += BLE_WRITE) {
       ch.simulateWrite(bytes.substr(off, BLE_WRITE));

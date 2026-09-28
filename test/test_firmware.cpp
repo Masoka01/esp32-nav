@@ -10,6 +10,8 @@
 // .ino mendefinisikan makro (LINE_MAX, TEXT_MAX, ...) yang bisa bentrok
 // dengan internal STL, jadi STL harus sudah selesai dimuat sebelum itu.
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <set>
 #include <string>
 #include <vector>
@@ -249,7 +251,7 @@ int main() {
     display.reset();
     Serial.clear();
     CharCallbacks cb;
-    BLECharacteristic ch("", 0);
+    NimBLECharacteristic ch("", 0);
     ch.setCallbacks(&cb);
 
     ch.simulateWrite("V1|1|50|Haloo");
@@ -311,7 +313,7 @@ int main() {
     display.reset();
     Serial.clear();
     CharCallbacks cb;
-    BLECharacteristic ch("", 0);
+    NimBLECharacteristic ch("", 0);
     ch.setCallbacks(&cb);
     for (int i = 0; i < 6; i++) ch.simulateWrite("V1|1|10|Antar" + std::to_string(i) + "\n");
     check(Serial.buf.find("antrean penuh") != std::string::npos, "kelebihan antrean dilaporkan");
@@ -325,7 +327,7 @@ int main() {
     Serial.clear();
     // Server & callback-nya dibuat setup() firmware; kita memicu event
     // lewat stub, bukan memanggil onConnect() yang private.
-    BLEServer* srv = BLEDevice::lastServer();
+    NimBLEServer* srv = NimBLEDevice::lastServer();
     check(srv != nullptr, "setup() mendaftarkan server");
     srv->fireConnect();
     check(deviceConnected, "onConnect menandai tersambung");
@@ -340,6 +342,31 @@ int main() {
     check(!deviceConnected, "onDisconnect menandai terputus");
     check(Serial.buf.find("Device disconnected") != std::string::npos, "log disconnection");
     display.reset();
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  section("guard: NimBLE, bukan Bluedroid");
+  {
+    // Baca sumber firmware sebagai teks. Yang menangkap di sini adalah
+    // regresi yang TIDAK bisa ditangkap compiler: stub Bluedroid sudah
+    // dihapus, jadi include yang salah akan gagal build dan ketahuan
+    // sendiri. Yang belum ter-catching adalah setName() -- tanpa baris itu
+    // firmware tetap compile, tetap advertise, tetap jalan, tapi Chrome
+    // tidak akan pernah menampilkan perangkat di device picker karena
+    // filter filters: [{ name: 'ESP32-NAV' }] tidak akan pernah cocok.
+    std::ifstream f("../esp32_nav/esp32_nav.ino");
+    std::stringstream ss; ss << f.rdbuf();
+    const std::string src = ss.str();
+
+    check(!src.empty(), "sumber firmware terbaca");
+    check(src.find("#include <NimBLEDevice.h>") != std::string::npos,
+          "firmware memakai NimBLEDevice.h (bukan Bluedroid)");
+    check(src.find("#include <BLEDevice.h>") == std::string::npos,
+          "tidak ada include Bluedroid yang menggantung");
+    check(src.find("setName(\"ESP32-NAV\")") != std::string::npos,
+          "advertising mengirim nama perangkat");
+    check(src.find("NimBLEDevice::startAdvertising()") != std::string::npos,
+          "advertising diulang setelah disconnect (tidak otomatis di 2.x)");
   }
 
   // ────────────────────────────────────────────────────────────────────

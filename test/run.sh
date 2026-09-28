@@ -23,13 +23,23 @@ run() {
 
 mkdir -p build
 
-# -I . supaya <BLEDevice.h> & friends di test/ ketemu.
+# -I . supaya <NimBLEDevice.h> di test/ ketemu.
 # Leak dari stub BLE sengaja diabaikan: stub membuat objek dengan new dan
 # tidak membebaskan, yang tidak relevan untuk test yang sekali jalan.
 export ASAN_OPTIONS=detect_leaks=0
 
-g++ -std=c++17 -I. -w -o build/test_firmware test_firmware.cpp
-g++ -std=c++17 -I. -w -o build/test_cross   test_cross.cpp
+# Compile failure HARUS menghentikan script. Tanpa guard di sini, binary
+# dari run sebelumnya tetap ada di build/ dan akan dieksekusi seolah-olah
+# pengujian baru -- yang menghasilkan "PASS" untuk kode yang sebenarnya
+# tidak pernah bisa dikompilasi. Itu sudah pernah terjadi sekali di sini.
+if ! g++ -std=c++17 -I. -w -o build/test_firmware test_firmware.cpp; then
+  echo "✗ firmware: GAGAL COMPILE"
+  exit 1
+fi
+if ! g++ -std=c++17 -I. -w -o build/test_cross test_cross.cpp; then
+  echo "✗ cross-check: GAGAL COMPILE"
+  exit 1
+fi
 
 run "firmware: logika .ino"        ./build/test_firmware
 run "cross-check: web → firmware"  ./build/test_cross

@@ -12,10 +12,17 @@
     OLED SCL  →  GPIO 22
 */
 
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
+// Stack BLE: NimBLE, bukan Bluedroid bawaan ESP-IDF.
+//
+// Alasannya konkret, bukan selera. BLEDevice.h (Bluedroid) hanya ada di
+// chip ESP32 asli. ESP32-C3 punya radio BLE 5.0, tapi TIDAK punya stack
+// itu -- firmware tidak akan bisa dikompilasi di sana sama sekali.
+// NimBLE jalan di KEDUA chip, jadi satu sketch ini bisa dipakai untuk
+// WROOM maupun C3 tanpa perubahan.
+//
+// Butuh NimBLE-Arduino 2.x. Di 1.x API-nya beda jauh (callback tidak punya
+// parameter connInfo, dan advertising memakai nama fungsi yang lain).
+#include <NimBLEDevice.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -99,34 +106,45 @@ bool rxOverflow = false;
 //  BLE CALLBACKS
 // ═══════════════════════════════════════════════════════════════════
 
-class ServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer* pServer) override {
+class ServerCallbacks : public NimBLEServerCallbacks {
+  // NimBLE 2.x menambah parameter NimBLEConnInfo& ke setiap callback koneksi.
+  // Versi 1.x hanya punya BLEServer* saja -- kalau tanda tangannya lupa
+  // ditambah, override ini tidak akan pernah dipanggil.
+  void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
     deviceConnected = true;
     showStatus("Terhubung!", true);
     Serial.println("[BLE] Device connected");
   }
 
-  void onDisconnect(BLEServer* pServer) override {
+  void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
     deviceConnected = false;
     // Buang sisa pesan setengah jadi supaya tidak muncul saat reconnect.
     rxBuf = "";
     rxOverflow = false;
     showStatus("Menunggu HP...", false);
-    Serial.println("[BLE] Device disconnected");
-    BLEDevice::startAdvertising();
+    Serial.print("[BLE] Device disconnected, reason=");
+    Serial.println(reason);
+    // Wajib: NimBLE 2.x tidak lagi mengiklankan ulang secara otomatis
+    // saat peer putus. Tanpa baris ini, HP tidak akan menemukan perangkat
+    // lagi sampai ESP32 di-reset.
+    NimBLEDevice::startAdvertising();
   }
 };
 
-class CharCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic* pChar) override {
+class CharCallbacks : public NimBLECharacteristicCallbacks {
+  // Parameter connInfo wajib ada di NimBLE 2.x (versi 1.x tidak punya).
+  void onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override {
     // Callback ini jalan di context task GATT. JANGAN menggambar di sini:
     // frame SSD1306 lewat I2C butuh 10-30ms dan akan menunda BLE.
     // Task juga hanya accumulate + enqueue, lalu return.
 
-    // getData()/getLength() dipakai, bukan getValue().c_str() —
-    // c_str() lossy dan tidak aman untuk data multi-byte.
-    const uint8_t* data = pChar->getData();
-    size_t len = pChar->getLength();
+    // getData()/getLength() sudah tidak ada di NimBLE; nilainya dibungkus
+    // NimBLEAttValue. Yang tetap dijaga: baca lewat data() + length(),
+    // BUKAN c_str() — c_str() lossy dan tidak aman untuk data multi-byte
+    // (nama jalan Indonesia bisa mengandung byte di luar 7-bit).
+    const NimBLEAttValue& val = pChar->getValue();
+    const uint8_t* data = val.data();
+    size_t len = val.length();
     if (data == NULL || len == 0) return;
 
     for (size_t i = 0; i < len; i++) {
@@ -577,30 +595,44 @@ void setup() {
   delay(500);
 
   // Init BLE
-  BLEDevice::init("ESP32-NAV");
+  NimBLEDevice::init("ESP32-NAV");
 
-  BLEServer* pServer = BLEDevice::createServer();
+  NimBLEServer* pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
 
-  BLEService* pService = pServer->createService(SERVICE_UUID);
+  NimBLEService* pService = pServer->createService(SERVICE_UUID);
 
-  // PROPERTY_WRITE_NR ditambahkan supaya writeValueWithResponse()
-  // (dipakai website sekarang) maupun writeValue() versi lama
-  // (halaman yang masih cached di browser) sama-sama diterima.
-  BLECharacteristic* pChar = pService->createCharacteristic(
+  // WRITE_NR tetap dipakai supaya writeValueWithResponse() (dipakai website
+  // sekarang) maupun writeValue() versi lama (halaman yang masih cached di
+  // browser) sama-sama diterima. Di NimBLE 2.x flag-nya pindah ke enum
+  // NIMBLE_PROPERTY, bukan lagi BLECharacteristic::PROPERTY_*.
+  NimBLECharacteristic* pChar = pService->createCharacteristic(
     CHAR_UUID,
-    BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR
+    NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
   );
   pChar->setCallbacks(new CharCallbacks());
-  pChar->addDescriptor(new BLE2902());
+  // Descriptor BLE2902 (Client Characteristic Configuration) DIHAPUS.
+  // Di Bluedroid itu perlu; di NimBLE kelasnya tidak ada, dan characteristic
+  // ini write-only tanpa notify -- CCCD tidak pernah dipakai. Chrome tidak
+  // memerlukannya untuk menulis.
 
   pService->start();
 
-  BLEAdvertising* pAdv = BLEDevice::getAdvertising();
-  pAdv->addServiceUUID(SERVICE_UUID);
-  pAdv->setScanResponse(true);
-  pAdv->setMinPreferred(0x06);
-  BLEDevice::startAdvertising();
+  NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
+
+  // WAJIB. Di NimBLE 2.x nama perangkat tidak lagi dikirim di packet
+  // advertising secara default. Website memfilter dengan
+  // filters: [{ name: 'ESP32-NAV' }], jadi tanpa baris ini Chrome akan
+  // menampilkan perangkat TANPA NAMA dan filter tidak akan pernah cocok --
+  // gejalanya: "no devices found" padahal ESP32 menyala dan liegt di dekat.
+  pAdv->setName("ESP32-NAV");
+
+  pAdv->addServiceUUID(pService->getUUID());
+  pAdv->enableScanResponse(true);
+  // setMinPreferred() DIHAPUS di NimBLE 2.x (digantikan setPreferredParams).
+  // Itu cuma hint PHY, bukan syarat koneksi, dan Chrome menegosiasikan
+  // PHY-nya sendiri -- jadi dibuang, bukan diterjemahkan.
+  pAdv->start();
 
   Serial.println("[BLE] Advertising dimulai sebagai ESP32-NAV");
   Serial.println("[BLE] Protokol: \"V1|<icon>|<dist_m>|<text>\\n\"");
