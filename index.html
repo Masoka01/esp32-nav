@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>ESP32 Navigator</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --accent: #4f8ef7;
+      --accent2: #2ecc8a;
+      --warn: #f7c94f;
+      --danger: #f75f5f;
+      --text: #e8eaf0;
+      --text-muted: #7a7f99;
+      --border: #2a2f45;
+      --radius: 12px;
+      --font: 'DM Sans', sans-serif;
+      --mono: 'DM Mono', monospace;
+    }
+
+    html, body {
+      height: 100%;
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      overflow: hidden;
+    }
+
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    /* ── TOP PANEL ── */
+    #top-panel {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 14px 10px;
+      z-index: 1000;
+      flex-shrink: 0;
+    }
+
+    .app-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      letter-spacing: 0.08em;
+      margin-bottom: 10px;
+      font-family: var(--mono);
+    }
+
+    .search-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .search-wrap {
+      flex: 1;
+      position: relative;
+    }
+
+    .search-wrap input {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px 10px 36px;
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .search-wrap input:focus { border-color: var(--accent); }
+    .search-wrap input::placeholder { color: var(--text-muted); }
+
+    .search-icon {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+      font-size: 16px;
+      pointer-events: none;
+    }
+
+    #suggestions {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0; right: 0;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      z-index: 2000;
+      max-height: 200px;
+      overflow-y: auto;
+      display: none;
+    }
+
+    .suggestion-item {
+      padding: 10px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      line-height: 1.4;
+    }
+
+    .suggestion-item:last-child { border-bottom: none; }
+    .suggestion-item:hover { background: var(--surface); color: var(--accent); }
+
+    #btn-locate {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 40px; height: 40px;
+      color: var(--text);
+      font-size: 18px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: border-color 0.15s, color 0.15s;
+    }
+
+    #btn-locate:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── MAP ── */
+    #map {
+      flex: 1;
+      min-height: 0;
+      z-index: 1;
+    }
+
+    /* ── BOTTOM PANEL ── */
+    #bottom-panel {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 12px 14px;
+      z-index: 1000;
+      flex-shrink: 0;
+    }
+
+    /* BLE status bar */
+    #ble-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    #ble-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+
+    #ble-dot.connected { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+    #ble-dot.connecting { background: var(--warn); animation: pulse 1s infinite; }
+
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+
+    #ble-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      flex: 1;
+      font-family: var(--mono);
+    }
+
+    #btn-ble {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 12px;
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    #btn-ble:hover { border-color: var(--accent); color: var(--accent); }
+    #btn-ble.connected { border-color: var(--danger); color: var(--danger); }
+
+    /* Instruction card */
+    #instruction-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 58px;
+    }
+
+    #instr-icon {
+      font-size: 26px;
+      flex-shrink: 0;
+      width: 36px;
+      text-align: center;
+    }
+
+    #instr-text {
+      flex: 1;
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1.4;
+      color: var(--text);
+    }
+
+    #instr-dist {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--accent);
+      flex-shrink: 0;
+    }
+
+    /* Route info strip */
+    #route-info {
+      display: none;
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+      font-family: var(--mono);
+      display: flex;
+      gap: 16px;
+    }
+
+    #route-info span { display: none; }
+    #route-info.visible span { display: inline; }
+
+    /* Nav controls */
+    #nav-controls {
+      display: none;
+      margin-top: 10px;
+      gap: 8px;
+    }
+
+    #nav-controls.visible { display: flex; }
+
+    .nav-btn {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+
+    .nav-btn:active { opacity: 0.7; }
+    #btn-start { background: var(--accent); color: #fff; }
+    #btn-stop  { background: var(--surface2); color: var(--danger); border: 1px solid var(--danger); }
+
+    /* Toast */
+    #toast {
+      position: fixed;
+      bottom: calc(env(safe-area-inset-bottom, 0px) + 80px);
+      left: 50%; transform: translateX(-50%);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-size: 13px;
+      color: var(--text);
+      z-index: 9999;
+      opacity: 0;
+      transition: opacity 0.2s;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    #toast.show { opacity: 1; }
+
+    /* Leaflet overrides */
+    .leaflet-control-attribution { font-size: 9px !important; }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- TOP -->
+  <div id="top-panel">
+    <div class="app-title">ESP32 NAVIGATOR</div>
+    <div class="search-row">
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input id="search-input" type="text" placeholder="Cari tujuan..." autocomplete="off" />
+        <div id="suggestions"></div>
+      </div>
+      <button id="btn-locate" title="Lokasi saya">📍</button>
+    </div>
+  </div>
+
+  <!-- MAP -->
+  <div id="map"></div>
+
+  <!-- BOTTOM -->
+  <div id="bottom-panel">
+    <div id="ble-bar">
+      <div id="ble-dot"></div>
+      <span id="ble-label">ESP32 belum terhubung</span>
+      <button id="btn-ble">Hubungkan</button>
+    </div>
+
+    <div id="instruction-card">
+      <div id="instr-icon">🗺️</div>
+      <div id="instr-text">Cari tujuan untuk mulai navigasi</div>
+      <div id="instr-dist"></div>
+    </div>
+
+    <div id="route-info">
+      <span id="info-dist"></span>
+      <span id="info-dur"></span>
+    </div>
+
+    <div id="nav-controls">
+      <button class="nav-btn" id="btn-start">Mulai Navigasi</button>
+      <button class="nav-btn" id="btn-stop">Berhenti</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ══════════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════════
+const state = {
+  userLat: null, userLng: null,
+  destLat: null, destLng: null,
+  steps: [],
+  currentStep: 0,
+  navigating: false,
+  bleDevice: null,
+  bleChar: null,
+  watchId: null,
+  routeLayer: null,
+  destMarker: null,
+  userMarker: null,
+};
+
+// BLE UUIDs (harus sama dengan kode ESP32)
+const SERVICE_UUID  = '6e400001-b5b3-f393-e0a9-e50e24dcca9e';
+const CHAR_UUID     = '6e400002-b5b3-f393-e0a9-e50e24dcca9e';
+
+// ══════════════════════════════════════════════
+//  MAP INIT
+// ══════════════════════════════════════════════
+const map = L.map('map', { zoomControl: false }).setView([-6.2, 106.8], 13);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors',
+  maxZoom: 19,
+}).addTo(map);
+
+L.control.zoom({ position: 'topright' }).addTo(map);
+
+const userIcon = L.divIcon({
+  html: '<div style="width:16px;height:16px;background:#4f8ef7;border:3px solid #fff;border-radius:50%;box-shadow:0 0 8px #4f8ef7aa"></div>',
+  iconSize: [16, 16], iconAnchor: [8, 8], className: '',
+});
+
+const destIcon = L.divIcon({
+  html: '<div style="font-size:26px;line-height:1;filter:drop-shadow(0 2px 4px #0008)">📍</div>',
+  iconSize: [26, 32], iconAnchor: [13, 32], className: '',
+});
+
+// ══════════════════════════════════════════════
+//  GEOLOCATION
+// ══════════════════════════════════════════════
+function setUserPos(lat, lng) {
+  state.userLat = lat; state.userLng = lng;
+  if (state.userMarker) state.userMarker.setLatLng([lat, lng]);
+  else state.userMarker = L.marker([lat, lng], { icon: userIcon }).addTo(map);
+  if (state.navigating) checkStepProgress(lat, lng);
+}
+
+function locateMe() {
+  if (!navigator.geolocation) { toast('GPS tidak tersedia'); return; }
+  navigator.geolocation.getCurrentPosition(pos => {
+    const { latitude: lat, longitude: lng } = pos.coords;
+    setUserPos(lat, lng);
+    map.setView([lat, lng], 15);
+  }, () => toast('Tidak bisa mendapatkan lokasi'));
+}
+
+document.getElementById('btn-locate').addEventListener('click', locateMe);
+
+// Init locate on load
+locateMe();
+
+// ══════════════════════════════════════════════
+//  SEARCH / NOMINATIM
+// ══════════════════════════════════════════════
+const searchInput   = document.getElementById('search-input');
+const suggestionsEl = document.getElementById('suggestions');
+let searchTimer;
+
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  const q = searchInput.value.trim();
+  if (q.length < 3) { suggestionsEl.style.display = 'none'; return; }
+  searchTimer = setTimeout(() => fetchSuggestions(q), 400);
+});
+
+async function fetchSuggestions(q) {
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&countrycodes=id`;
+    const res  = await fetch(url, { headers: { 'Accept-Language': 'id' } });
+    const data = await res.json();
+    renderSuggestions(data);
+  } catch { toast('Gagal mencari lokasi'); }
+}
+
+function renderSuggestions(items) {
+  suggestionsEl.innerHTML = '';
+  if (!items.length) { suggestionsEl.style.display = 'none'; return; }
+  items.forEach(item => {
+    const div = document.createElement('div');
+    div.className = 'suggestion-item';
+    div.textContent = item.display_name;
+    div.addEventListener('click', () => {
+      searchInput.value = item.display_name;
+      suggestionsEl.style.display = 'none';
+      selectDestination(parseFloat(item.lat), parseFloat(item.lon), item.display_name);
+    });
+    suggestionsEl.appendChild(div);
+  });
+  suggestionsEl.style.display = 'block';
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-wrap')) suggestionsEl.style.display = 'none';
+});
+
+// ══════════════════════════════════════════════
+//  ROUTING / OSRM
+// ══════════════════════════════════════════════
+async function selectDestination(lat, lng, name) {
+  state.destLat = lat; state.destLng = lng;
+
+  if (state.destMarker) state.destMarker.setLatLng([lat, lng]);
+  else state.destMarker = L.marker([lat, lng], { icon: destIcon }).addTo(map);
+
+  if (!state.userLat) { toast('Aktifkan GPS dulu'); return; }
+
+  setInstruction('⏳', 'Menghitung rute...');
+  await fetchRoute();
+}
+
+async function fetchRoute() {
+  const { userLat: oLat, userLng: oLng, destLat: dLat, destLng: dLng } = state;
+  if (!oLat || !dLat) return;
+
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${oLng},${oLat};${dLng},${dLat}?steps=true&geometries=geojson&overview=full&annotations=false`;
+    const res  = await fetch(url);
+    const data = await res.json();
+
+    if (data.code !== 'Ok') { toast('Rute tidak ditemukan'); return; }
+
+    const route = data.routes[0];
+    drawRoute(route.geometry.coordinates);
+    parseSteps(route.legs[0].steps);
+    showRouteInfo(route.distance, route.duration);
+    showNavControls();
+    fitRoute(route.geometry.coordinates);
+  } catch { toast('Gagal mengambil rute'); }
+}
+
+function drawRoute(coords) {
+  if (state.routeLayer) map.removeLayer(state.routeLayer);
+  const latlngs = coords.map(([lng, lat]) => [lat, lng]);
+  state.routeLayer = L.polyline(latlngs, {
+    color: '#4f8ef7', weight: 5, opacity: 0.85,
+    lineCap: 'round', lineJoin: 'round',
+  }).addTo(map);
+}
+
+function fitRoute(coords) {
+  const latlngs = coords.map(([lng, lat]) => [lat, lng]);
+  map.fitBounds(L.latLngBounds(latlngs), { padding: [40, 40] });
+}
+
+function parseSteps(rawSteps) {
+  state.steps = rawSteps.map(s => {
+    const loc = s.maneuver.location; // [lng, lat]
+    return {
+      lat: loc[1], lng: loc[0],
+      instruction: cleanInstruction(s.maneuver.type, s.maneuver.modifier, s.name),
+      icon: maneuverIcon(s.maneuver.type, s.maneuver.modifier),
+      distance: s.distance,
+    };
+  });
+  state.currentStep = 0;
+  updateInstructionUI();
+}
+
+function cleanInstruction(type, modifier, name) {
+  const road = name && name !== '' ? ` ke ${name}` : '';
+  if (type === 'depart') return `Mulai perjalanan${road}`;
+  if (type === 'arrive') return 'Anda telah tiba di tujuan';
+  if (type === 'turn') {
+    if (modifier === 'left')       return `Belok kiri${road}`;
+    if (modifier === 'right')      return `Belok kanan${road}`;
+    if (modifier === 'slight left')  return `Sedikit belok kiri${road}`;
+    if (modifier === 'slight right') return `Sedikit belok kanan${road}`;
+    if (modifier === 'sharp left')   return `Belok tajam kiri${road}`;
+    if (modifier === 'sharp right')  return `Belok tajam kanan${road}`;
+    if (modifier === 'uturn')        return `Putar balik${road}`;
+  }
+  if (type === 'roundabout') return `Masuk bundaran${road}`;
+  if (type === 'merge')      return `Gabung ke jalan${road}`;
+  if (type === 'fork') {
+    if (modifier === 'left')  return `Ambil kiri di persimpangan${road}`;
+    if (modifier === 'right') return `Ambil kanan di persimpangan${road}`;
+  }
+  return `Lanjutkan${road}`;
+}
+
+function maneuverIcon(type, modifier) {
+  if (type === 'depart') return '🚦';
+  if (type === 'arrive') return '🏁';
+  if (type === 'roundabout') return '🔄';
+  if (modifier === 'left' || modifier === 'sharp left') return '⬅️';
+  if (modifier === 'right' || modifier === 'sharp right') return '➡️';
+  if (modifier === 'slight left') return '↖️';
+  if (modifier === 'slight right') return '↗️';
+  if (modifier === 'uturn') return '↩️';
+  return '⬆️';
+}
+
+function formatDist(m) {
+  return m >= 1000 ? `${(m/1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
+
+function formatDur(s) {
+  const m = Math.round(s / 60);
+  return m >= 60 ? `${Math.floor(m/60)} jam ${m%60} mnt` : `${m} mnt`;
+}
+
+function showRouteInfo(dist, dur) {
+  const el = document.getElementById('route-info');
+  document.getElementById('info-dist').textContent = `📏 ${formatDist(dist)}`;
+  document.getElementById('info-dur').textContent  = `⏱ ${formatDur(dur)}`;
+  el.classList.add('visible');
+}
+
+function showNavControls() {
+  document.getElementById('nav-controls').classList.add('visible');
+}
+
+// ══════════════════════════════════════════════
+//  NAVIGATION
+// ══════════════════════════════════════════════
+document.getElementById('btn-start').addEventListener('click', startNavigation);
+document.getElementById('btn-stop').addEventListener('click', stopNavigation);
+
+function startNavigation() {
+  if (!state.steps.length) { toast('Cari tujuan dulu'); return; }
+  state.navigating = true;
+  state.currentStep = 0;
+  updateInstructionUI();
+  sendToBLE(currentInstructionText());
+
+  // Watch GPS
+  if (navigator.geolocation) {
+    state.watchId = navigator.geolocation.watchPosition(pos => {
+      setUserPos(pos.coords.latitude, pos.coords.longitude);
+    }, null, { enableHighAccuracy: true, maximumAge: 2000 });
+  }
+
+  toast('Navigasi dimulai');
+}
+
+function stopNavigation() {
+  state.navigating = false;
+  if (state.watchId !== null) {
+    navigator.geolocation.clearWatch(state.watchId);
+    state.watchId = null;
+  }
+  setInstruction('🗺️', 'Navigasi dihentikan');
+  toast('Navigasi dihentikan');
+}
+
+function currentInstructionText() {
+  const s = state.steps[state.currentStep];
+  if (!s) return '';
+  return `${s.icon} ${s.instruction} (${formatDist(s.distance)})`;
+}
+
+function updateInstructionUI() {
+  const s = state.steps[state.currentStep];
+  if (!s) return;
+  setInstruction(s.icon, s.instruction, formatDist(s.distance));
+}
+
+function setInstruction(icon, text, dist = '') {
+  document.getElementById('instr-icon').textContent = icon;
+  document.getElementById('instr-text').textContent = text;
+  document.getElementById('instr-dist').textContent = dist;
+}
+
+function checkStepProgress(lat, lng) {
+  const step = state.steps[state.currentStep];
+  if (!step) return;
+  const dist = haversine(lat, lng, step.lat, step.lng);
+  if (dist < 25) { // within 25m → next step
+    state.currentStep++;
+    if (state.currentStep >= state.steps.length) {
+      stopNavigation();
+      setInstruction('🏁', 'Anda telah tiba!');
+      sendToBLE('🏁 Anda telah tiba di tujuan!');
+      return;
+    }
+    updateInstructionUI();
+    sendToBLE(currentInstructionText());
+  }
+}
+
+function haversine(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ══════════════════════════════════════════════
+//  BLE
+// ══════════════════════════════════════════════
+const bleBtn   = document.getElementById('btn-ble');
+const bleDot   = document.getElementById('ble-dot');
+const bleLabel = document.getElementById('ble-label');
+
+bleBtn.addEventListener('click', async () => {
+  if (state.bleDevice && state.bleDevice.gatt.connected) {
+    state.bleDevice.gatt.disconnect();
+    onBLEDisconnect();
+    return;
+  }
+  if (!navigator.bluetooth) {
+    toast('Browser ini tidak mendukung Web Bluetooth. Pakai Chrome Android.');
+    return;
+  }
+  try {
+    setBLEStatus('connecting');
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'ESP32-NAV' }],
+      optionalServices: [SERVICE_UUID],
+    });
+    state.bleDevice = device;
+    device.addEventListener('gattserverdisconnected', onBLEDisconnect);
+    const server  = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    state.bleChar  = await service.getCharacteristic(CHAR_UUID);
+    setBLEStatus('connected', device.name);
+    toast('ESP32 terhubung!');
+  } catch (e) {
+    setBLEStatus('disconnected');
+    if (e.name !== 'NotFoundError') toast('Gagal konek: ' + e.message);
+  }
+});
+
+function onBLEDisconnect() {
+  state.bleChar = null;
+  setBLEStatus('disconnected');
+  toast('ESP32 terputus');
+}
+
+function setBLEStatus(status, name = '') {
+  bleDot.className = '';
+  if (status === 'connected') {
+    bleDot.classList.add('connected');
+    bleLabel.textContent = `Terhubung: ${name}`;
+    bleBtn.textContent = 'Putuskan';
+    bleBtn.classList.add('connected');
+  } else if (status === 'connecting') {
+    bleDot.classList.add('connecting');
+    bleLabel.textContent = 'Menghubungkan...';
+    bleBtn.textContent = 'Batal';
+    bleBtn.classList.remove('connected');
+  } else {
+    bleLabel.textContent = 'ESP32 belum terhubung';
+    bleBtn.textContent = 'Hubungkan';
+    bleBtn.classList.remove('connected');
+  }
+}
+
+async function sendToBLE(text) {
+  if (!state.bleChar) return;
+  try {
+    // Potong max 100 char agar muat di OLED
+    const trimmed = text.substring(0, 100);
+    const encoded = new TextEncoder().encode(trimmed);
+    await state.bleChar.writeValue(encoded);
+  } catch (e) {
+    console.error('BLE write error:', e);
+  }
+}
+
+// ══════════════════════════════════════════════
+//  TOAST
+// ══════════════════════════════════════════════
+let toastTimer;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
+}
+</script>
+</body>
+</html>
