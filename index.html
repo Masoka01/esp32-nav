@@ -49,6 +49,7 @@
       padding: 12px 14px 10px;
       z-index: 1000;
       flex-shrink: 0;
+      position: relative;
     }
 
     .app-title {
@@ -154,7 +155,7 @@
     }
     #maps-confirm button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 
-    #btn-locate {
+    #btn-locate, #btn-bookmarklet {
       background: var(--surface2);
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -167,7 +168,48 @@
       transition: border-color 0.15s, color 0.15s;
     }
 
-    #btn-locate:hover { border-color: var(--accent); color: var(--accent); }
+    #btn-locate:hover, #btn-bookmarklet:hover { border-color: var(--accent); color: var(--accent); }
+    #btn-bookmarklet.active { border-color: var(--accent); color: var(--accent); }
+
+    /* Panel bookmarklet — menumpuk di atas peta, tidak mendorong layout. */
+    #bookmarklet-panel {
+      position: absolute;
+      top: 100%;
+      left: 0; right: 0;
+      z-index: 3000;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      display: none;
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--text);
+    }
+    #bookmarklet-panel .bm-title { font-size: 13px; margin-bottom: 6px; }
+    #bookmarklet-panel ol { margin: 0 0 10px; padding-left: 18px; }
+    #bookmarklet-panel li { margin-bottom: 4px; }
+    #bookmarklet-panel .bm-hint { color: var(--text-muted); }
+    #bookmarklet-code {
+      width: 100%;
+      box-sizing: border-box;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 8px;
+      resize: none;
+      overflow: hidden;
+    }
+    #bookmarklet-panel .bm-actions { display: flex; gap: 8px; margin-top: 10px; }
+    #bookmarklet-panel button {
+      flex: 1; padding: 9px 12px; font-size: 13px; font-family: var(--font);
+      border-radius: 8px; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text); cursor: pointer;
+    }
+    #bookmarklet-panel button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 
     /* ── MAP ── */
     #map {
@@ -354,6 +396,21 @@
         <div id="maps-confirm"></div>
       </div>
       <button id="btn-locate" title="Lokasi saya">📍</button>
+      <button id="btn-bookmarklet" title="Kirim dari Google Maps">🔗</button>
+    </div>
+    <div id="bookmarklet-panel">
+      <div class="bm-title">Kirim tujuan dari Google Maps</div>
+      <ol>
+        <li>Salin kode di bawah ini.</li>
+        <li>Simpan sebagai bookmark bernama <b>Kirim ke ESP-Nav</b>
+            <span class="bm-hint">(Chrome: ⋮ → Bookmark → Edit → More ⋮ → Edit)</span></li>
+        <li>Buka lokasi di Google Maps, lalu tap bookmark itu.</li>
+      </ol>
+      <textarea id="bookmarklet-code" readonly rows="3" spellcheck="false"></textarea>
+      <div class="bm-actions">
+        <button id="btn-copy-bm" class="primary">Salin kode</button>
+        <button id="btn-close-bm">Tutup</button>
+      </div>
     </div>
   </div>
 
@@ -509,9 +566,13 @@ function renderSuggestions(items) {
 }
 
 document.addEventListener('click', e => {
-  if (e.target.closest('.search-wrap')) return;
+  // Panel bookmarklet ikut dikecualikan: tanpa ini, klik tombolnya akan
+  // membuka panel lalu langsung menutupnya lagi di handler document ini.
+  if (e.target.closest('.search-wrap') || e.target.closest('#bookmarklet-panel')
+      || e.target.closest('#btn-bookmarklet')) return;
   suggestionsEl.style.display = 'none';
   hideConfirm();
+  toggleBookmarkletPanel(false);
 });
 
 // ══════════════════════════════════════════════
@@ -682,7 +743,7 @@ function handleMapsInput(text) {
   if (res.ok) { showConfirm(res); return true; }
   if (res.reason === 'short-link') {
     hideConfirm();
-    toast('Link pendek tidak bisa dibaca. Buka di Chrome lalu salin dari address bar.');
+    toast('Link pendek tidak bisa dibaca. Pasang bookmark 🔗 di panel atas untuk kirim sekali-tap.');
     return true;
   }
   if (res.reason === 'needs-geocode' && res.name) {
@@ -702,6 +763,66 @@ searchInput.addEventListener('paste', e => {
 searchInput.addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   if (handleMapsInput(searchInput.value)) e.preventDefault();
+});
+
+// ══════════════════════════════════════════════
+//  BOOKMARKLET: KIRIM DARI GOOGLE MAPS
+// ══════════════════════════════════════════════
+//
+// Short link (maps.app.goo.gl) tidak bisa di-expand dari browser karena CORS
+// melarang JavaScript membaca jawaban server Google. Tapi bookmarklet tidak
+// melakukan fetch sama sekali: dia membaca location.href dari halaman yang
+// SEDANG dibuka, jadi tidak ada request lintas domain dan CORS tidak pernah
+// tersentuh. Batas yang menutup fitur di atas justru hilang total di sini.
+//
+// URL dikirim lewat FRAGMENT (#u=), bukan query string (?u=), supaya tujuan
+// yang dipilih user tidak pernah masuk ke access log server hosting.
+//
+// Alur: Google Maps → tap bookmark → tab baru terbuka ke aplikasi ini dengan
+// koordinat tujuan terisi → baris konfirmasi muncul → user menyetujui.
+
+function buildBookmarklet(appUrl) {
+  const base = String(appUrl || '').replace(/\/+$/, '');
+  return 'javascript:(function(){window.open('
+       + JSON.stringify(base + '#u=')
+       + '+encodeURIComponent(location.href))})()';
+}
+
+function readIncomingLink() {
+  const hash = location.hash.replace(/^#/, '');
+  if (!hash) return null;
+  try { return new URLSearchParams(hash).get('u'); } catch { return null; }
+}
+
+// Buang fragment setelah dibaca supaya refresh tidak memicu parse ulang dan
+// URL di address bar tetap bersih.
+function cleanIncomingLink() {
+  if (!location.hash) return;
+  history.replaceState(null, '', location.pathname + location.search);
+}
+
+const bmPanel = document.getElementById('bookmarklet-panel');
+const bmCode  = document.getElementById('bookmarklet-code');
+
+function toggleBookmarkletPanel(force) {
+  const open = force !== undefined ? force : bmPanel.style.display !== 'block';
+  if (open) bmCode.value = buildBookmarklet(location.origin);
+  bmPanel.style.display = open ? 'block' : 'none';
+  document.getElementById('btn-bookmarklet').classList.toggle('active', open);
+}
+
+document.getElementById('btn-bookmarklet').addEventListener('click', () => toggleBookmarkletPanel());
+document.getElementById('btn-close-bm').addEventListener('click', () => toggleBookmarkletPanel(false));
+document.getElementById('btn-copy-bm').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(bmCode.value);
+    toast('Kode tersalin. Simpan sebagai bookmark "Kirim ke ESP-Nav".');
+  } catch {
+    // Clipboard API butuh konteks aman; kalau gagal, andalkan selection manual.
+    bmCode.focus();
+    bmCode.select();
+    toast('Tekan Ctrl+C untuk menyalin kode yang tersorot.');
+  }
 });
 
 // ══════════════════════════════════════════════
@@ -1279,7 +1400,17 @@ function toast(msg) {
 }
 
 // Dipanggil terakhir, setelah semua fungsi di atas terdefinisi.
-restoreTrip();
+//
+// Kalau halaman dibuka dari bookmarklet, tidak ada yang dipulihkan: tautan yang
+// barusan dikirim adalah niat eksplisit user dan harus menang atas perjalanan
+// yang tersimpan sebelumnya. Kalau tidak, kembalikan perjalanan yang lalu.
+const incomingLink = readIncomingLink();
+if (incomingLink) {
+  cleanIncomingLink();
+  handleMapsInput(incomingLink);
+} else {
+  restoreTrip();
+}
 </script>
 </body>
 </html>

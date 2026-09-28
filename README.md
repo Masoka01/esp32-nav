@@ -81,6 +81,36 @@ diambil langsung dari pin Google — bukan diterka dari database geocoder.
 Baris konfirmasi sengaja tidak langsung merute: aplikasi ini dipakai sambil
 mengendarai, jadi tujuan yang salah harus dicek mata dulu.
 
+#### Link pendek (`maps.app.goo.gl/…`)
+
+Tautan yang keluar dari tombol Share sering berupa tautan pendek. **Browser
+tidak bisa mengembangkannya**: untuk tahu ke mana ia mengarah, JavaScript
+harus membaca jawaban server Google, dan `www.google.com/maps` tidak pernah
+mengirim header `Access-Control-Allow-Origin`. Bukan karena formatnya belum
+diketahui — server-nya memang menutup bacaannya.
+
+Kalau kamu paste tautan pendek, muncul toast yang mengarahkan ke tombol
+🔗 di panel atas:
+
+1. Tap tombol **🔗** → kode bookmarklet muncul
+2. **Salin kode**
+3. Simpan sebagai bookmark bernama **Kirim ke ESP-Nav**
+   - Chrome Android: ⋮ → Bookmark → **Edit** → More ⋮ → **Edit**, ganti URL
+   - Chrome desktop: seret tautan ke bookmark bar, lalu edit URL-nya
+4. Buka lokasi di Google Maps → tap bookmark itu
+
+Kode ini **dibentuk dari `location.origin` aplikasi sendiri saat runtime**, jadi
+tetap benar di Netlify, GitHub Pages, atau hosting lain — tidak ada URL yang
+ditulis manual di kode.
+
+Yang membuat bookmarklet bisa menembus batas yang tidak bisa dilalui parser:
+bookmarklet **tidak melakukan `fetch` sama sekali**. Ia membaca `location.href`
+dari halaman yang sedang dibuka, jadi tidak ada request lintas domain dan CORS
+tidak pernah tersentuh.
+
+URL tujuan dikirim lewat fragment `#u=`, bukan query string `?u=`, supaya tujuan
+yang dipilih pengguna tidak pernah masuk ke access log server hosting.
+
 ---
 
 ## Protokol BLE

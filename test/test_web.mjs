@@ -45,6 +45,8 @@ const src = [
   block('async function writeChunks', '      await ch.writeValue(chunk);\n    }\n  }\n}'),
   block('function sendToBLE', '  return bleSendChain;\n}'),
   block('const MAPS_NUM', '  return { ok: true, lat, lng, name, exact };\n}'),
+  block('function buildBookmarklet', "       + '+encodeURIComponent(location.href))})()';\n}"),
+  block('function readIncomingLink', "  try { return new URLSearchParams(hash).get('u'); } catch { return null; }\n}"),
 ].join('\n\n');
 
 // Guard: kalau endMarker tidak cocok, blok bisa terpotong dan test diam-diam
@@ -73,14 +75,15 @@ function makeChar() {
   return ch;
 }
 
+const fakeLocation = { hash: '' };
 const factory = new Function(
-  'state', 'TextEncoder', 'console', 'setImmediate',
+  'state', 'TextEncoder', 'console', 'setImmediate', 'location',
   'const TEXT_MAX = ' + consts.TEXT_MAX + '; const ICON_MAX = ' + consts.ICON_MAX +
   '; const BLE_CHUNK_SIZE = ' + consts.BLE_CHUNK_SIZE + ';\n' +
   'let bleSendChain = Promise.resolve();\n' +
-  src + '\nreturn { sanitizeForBLE, clampCode, normalizeDist, maneuverCode, writeChunks, sendToBLE, parseMapsLink, validLatLng };'
+  src + '\nreturn { sanitizeForBLE, clampCode, normalizeDist, maneuverCode, writeChunks, sendToBLE, parseMapsLink, validLatLng, buildBookmarklet, readIncomingLink };'
 );
-const api = factory(state, TextEncoder, console, setImmediate);
+const api = factory(state, TextEncoder, console, setImmediate, fakeLocation);
 // ── sanitizeForBLE ──────────────────────────────────────────────────────
 section('sanitizeForBLE');
 {
@@ -386,6 +389,58 @@ section('parseMapsLink');
     const r = p(WH2);
     check(r.lat < 0 && r.lng > 0, 'lat negatif & lng positif: urutan tidak tertukar');
   }
+}
+
+// ── bookmarklet ──────────────────────────────────────────────────────────
+section('bookmarklet');
+{
+  const b = api.buildBookmarklet;
+  const APP = 'https://esp32nav.netlify.app';
+
+  const bm = b(APP);
+  check(bm.startsWith('javascript:'), 'dimulai dengan javascript:');
+  check(bm.includes('encodeURIComponent(location.href)'),
+        'mengambil URL halaman yang sedang dibuka');
+  check(bm.includes(APP + '#u='), 'menunjuk ke aplikasi sendiri dengan fragment #u=');
+
+  // Privasi: tujuan user tidak boleh masuk ke access log server hosting,
+  // jadi fragment wajib, query string tidak boleh.
+  check(!bm.includes('?u='), 'tidak memakai query string (tujuan tidak masuk server log)');
+  check(bm.includes('#u='), 'memakai fragment #u=');
+
+  check(!b(APP + '/').includes('//#u='), 'garis miring ganda di URL aplikasi dibersihkan');
+  check(!b(APP + '///').includes('//#u='), 'garis miring berulang dibersihkan');
+  check(typeof b('') === 'string' && b('').length > 0, 'appUrl kosong tidak melempar');
+  check(b(null).includes('#u='), 'null tidak melempar');
+}
+
+section('readIncomingLink');
+{
+  const r = api.readIncomingLink;
+  // Bookmarklet mengirim location.href PENUH, jadi fixture ini harus lengkap
+  // dengan bagian data= yang memuat !8m2!3d...!4d... — itulah yang membuat
+  // hasilnya 'persis'. URL yang hanya punya @ akan jadi 'perkiraan', dan itu
+  // perilaku yang benar, bukan bug.
+  const G = 'https://www.google.com/maps/place/WH-2+ARCHER/@-7.4450072,112.3587988,1074m'
+    + '/data=!3m2!1e3!4b1!4m6!3m5!1s0x2e78110013ed2f4b:0x8cd94e5ea237aea0'
+    + '!8m2!3d-7.4450072!4d112.3587988!16s%2Fg%2F11ntpfhd38';
+
+  fakeLocation.hash = '#u=' + encodeURIComponent(G);
+  check(r() === G, 'fragment #u= dibaca dan di-decode');
+
+  fakeLocation.hash = '';
+  check(r() === null, 'tanpa fragment -> null');
+
+  fakeLocation.hash = '#lain=1';
+  check(r() === null, 'fragment tanpa u -> null');
+
+  // Yang kembali harus langsung bisa dipakai parser.
+  fakeLocation.hash = '#u=' + encodeURIComponent(G);
+  const res = api.parseMapsLink(r());
+  check(res.ok === true, 'hasil bookmarklet langsung bisa diparse');
+  check(res.name === 'WH-2 ARCHER', 'nama tempat terbaca dari tautan bookmarklet');
+  check(res.exact === true, 'pin terbaca sebagai koordinat persis');
+  fakeLocation.hash = '';
 }
 
 console.log('\n─────────────────────────────');
