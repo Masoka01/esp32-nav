@@ -415,18 +415,26 @@ const searchInput   = document.getElementById('search-input');
 const suggestionsEl = document.getElementById('suggestions');
 let searchTimer;
 
+// Cache hasil geocoding supaya ketik ulang tidak memukul Nominatim lagi.
+// Kebijakan usage Nominatim maksimal 1 request/detik, jadi debounce di
+// bawah WAJIB 1000ms dan tidak boleh dilewati oleh cache.
+const geocodeCache = new Map();
+
 searchInput.addEventListener('input', () => {
   clearTimeout(searchTimer);
   const q = searchInput.value.trim();
   if (q.length < 3) { suggestionsEl.style.display = 'none'; return; }
-  searchTimer = setTimeout(() => fetchSuggestions(q), 400);
+  if (geocodeCache.has(q)) { renderSuggestions(geocodeCache.get(q)); return; }
+  searchTimer = setTimeout(() => fetchSuggestions(q), 1000);
 });
 
 async function fetchSuggestions(q) {
+  if (geocodeCache.has(q)) { renderSuggestions(geocodeCache.get(q)); return; }
   try {
     const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&countrycodes=id`;
     const res  = await fetch(url, { headers: { 'Accept-Language': 'id' } });
     const data = await res.json();
+    geocodeCache.set(q, data);
     renderSuggestions(data);
   } catch { toast('Gagal mencari lokasi'); }
 }
@@ -508,6 +516,7 @@ function parseSteps(rawSteps) {
       lat: loc[1], lng: loc[0],
       instruction: cleanInstruction(s.maneuver.type, s.maneuver.modifier, s.name),
       icon: maneuverIcon(s.maneuver.type, s.maneuver.modifier),
+      code: maneuverCode(s.maneuver.type, s.maneuver.modifier),
       distance: s.distance,
     };
   });
@@ -549,6 +558,30 @@ function maneuverIcon(type, modifier) {
   return '⬆️';
 }
 
+// Kode numerik yang dikirim ke ESP32 (0..12). HARUS sinkron dengan tabel
+// ICON_* di esp32_nav.ino. Emoji di atas hanya untuk tampilan web.
+function maneuverCode(type, modifier) {
+  if (type === 'depart')    return 0;
+  if (type === 'arrive')    return 11;
+  // Semua varian bundaran/rotary dipetakan ke satu ikon.
+  if (type === 'roundabout' || type === 'rotary' ||
+      type === 'roundabout turn' || type === 'exit roundabout' ||
+      type === 'exit rotary') return 9;
+  // Ramp dan persimpangan ambil jalur gabungan/masuk.
+  if (type === 'merge' || type === 'on ramp' || type === 'off ramp') return 10;
+  if (modifier === 'uturn')         return 5;
+  if (modifier === 'slight left')   return 2;
+  if (modifier === 'left')          return 3;
+  if (modifier === 'sharp left')    return 4;
+  if (modifier === 'slight right')  return 6;
+  if (modifier === 'right')         return 7;
+  if (modifier === 'sharp right')   return 8;
+  // "new name" = nama jalan berubah, tapi geometri tetap lurus.
+  // cleanInstruction() juga jatuh ke "Lanjutkan", jadi ini konsisten.
+  if (type === 'continue' || type === 'new name' || type === 'end of road') return 1;
+  return 12;
+}
+
 function formatDist(m) {
   return m >= 1000 ? `${(m/1000).toFixed(1)} km` : `${Math.round(m)} m`;
 }
@@ -580,7 +613,8 @@ function startNavigation() {
   state.navigating = true;
   state.currentStep = 0;
   updateInstructionUI();
-  sendToBLE(currentInstructionText());
+  const first = currentInstructionPayload();
+  if (first) sendToBLE(first.code, first.text, first.dist);
 
   // Watch GPS
   if (navigator.geolocation) {
@@ -602,10 +636,11 @@ function stopNavigation() {
   toast('Navigasi dihentikan');
 }
 
-function currentInstructionText() {
+// Instruksi yang sedang aktif, dipakai untuk UI web dan payload BLE.
+function currentInstructionPayload() {
   const s = state.steps[state.currentStep];
-  if (!s) return '';
-  return `${s.icon} ${s.instruction} (${formatDist(s.distance)})`;
+  if (!s) return null;
+  return { code: s.code, text: s.instruction, dist: s.distance };
 }
 
 function updateInstructionUI() {
@@ -629,11 +664,12 @@ function checkStepProgress(lat, lng) {
     if (state.currentStep >= state.steps.length) {
       stopNavigation();
       setInstruction('🏁', 'Anda telah tiba!');
-      sendToBLE('🏁 Anda telah tiba di tujuan!');
+      sendToBLE(11, 'Anda telah tiba di tujuan', -1);
       return;
     }
     updateInstructionUI();
-    sendToBLE(currentInstructionText());
+    const next = currentInstructionPayload();
+    if (next) sendToBLE(next.code, next.text, next.dist);
   }
 }
 
@@ -706,16 +742,69 @@ function setBLEStatus(status, name = '') {
   }
 }
 
-async function sendToBLE(text) {
-  if (!state.bleChar) return;
-  try {
-    // Potong max 100 char agar muat di OLED
-    const trimmed = text.substring(0, 100);
-    const encoded = new TextEncoder().encode(trimmed);
-    await state.bleChar.writeValue(encoded);
-  } catch (e) {
-    console.error('BLE write error:', e);
+// ══════════════════════════════════════════════
+//  BLE WRITE
+//
+//  Protokol (HARUS sinkron dengan esp32_nav.ino):
+//      V1|<icon>|<dist_m>|<text>\n
+//
+//  onWrite() di firmware dipanggil SEKALI PER WRITE, jadi satu pesan
+//  harus dikirim sebagai rangkaian write berurutan dan diakhiri newline.
+//  Tanpa newline firmware tidak akan menggambar apa pun.
+// ══════════════════════════════════════════════
+const BLE_CHUNK_SIZE = 20;  // muat pada MTU default 23 (3 byte header)
+const TEXT_MAX = 40;        // sama dengan TEXT_MAX di firmware
+const ICON_MAX = 12;
+
+// Sanitasi defensif: firmware juga menyaring, tapi di sini kita menjamin
+// payload 100% ASCII sehingga pemotongan per 20 byte tidak pernah memecah
+// karakter multi-byte di tengah chunk.
+function sanitizeForBLE(text) {
+  return String(text)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\x20-\x7E]/g, ' ')
+    .replace(/[|\r\n\t]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, TEXT_MAX);
+}
+
+function clampCode(c) {
+  const n = Math.round(Number(c));
+  if (!Number.isFinite(n) || n < 0 || n > ICON_MAX) return 12;
+  return n;
+}
+
+function normalizeDist(d) {
+  const n = Math.round(Number(d));
+  return Number.isFinite(n) ? n : -1;
+}
+
+// Rantai antrean: satu pesan selesai sebelum yang berikutnya mulai, supaya
+// dua write tidak pernah saling menimpa di tengah chunk.
+let bleSendChain = Promise.resolve();
+
+async function writeChunks(bytes) {
+  for (let i = 0; i < bytes.length; i += BLE_CHUNK_SIZE) {
+    const chunk = bytes.slice(i, i + BLE_CHUNK_SIZE);
+    const ch = state.bleChar;
+    if (!ch) return;
+    if (typeof ch.writeValueWithResponse === 'function') {
+      await ch.writeValueWithResponse(chunk);
+    } else {
+      await ch.writeValue(chunk);
+    }
   }
+}
+
+function sendToBLE(code, text, distMeters = -1) {
+  if (!state.bleChar) return Promise.resolve();
+  const payload = `V1|${clampCode(code)}|${normalizeDist(distMeters)}|${sanitizeForBLE(text)}\n`;
+  const bytes = new TextEncoder().encode(payload);
+  bleSendChain = bleSendChain
+    .then(() => writeChunks(bytes))
+    .catch(e => { console.error('BLE write error:', e); });
+  return bleSendChain;
 }
 
 // ══════════════════════════════════════════════
