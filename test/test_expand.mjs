@@ -1,8 +1,8 @@
-// Test untuk api/expand.ts — resolver short link Google Maps.
+// Test untuk api/expand.js — resolver short link Google Maps.
 //
-// Modul .ts di-import langsung. Node punya type-stripping bawaan, jadi ini
-// jalan tanpa langkah build dan tanpa menambah dependency apa pun —
-// Gossling ini tetap tanpa node_modules.
+// Modul di-import langsung tanpa build, sama seperti src/*.js. Project ini
+// sengaja tidak punya package.json maupun node_modules, dan file .ts di api/
+// membuat Vercel butuh build step — yang justru menggagalkan deploy.
 //
 // `fetch` disuntikkan sebagai parameter, jadi tidak ada satu pun test yang
 // menyentuh jaringan. Ini yang membuat timeout dan rantai redirect bisa diuji
@@ -15,7 +15,7 @@
 //
 // Run:  node test/test_expand.mjs
 
-import { expandShortLink, default as handler } from '../api/expand.ts';
+import { expandShortLink, default as handler } from '../api/expand.js';
 
 let pass = 0, fail = 0;
 const section = (s) => console.log(`\n== ${s} ==`);
@@ -324,7 +324,7 @@ section('Sinkronisasi allowlist server ↔ client');
   // Kalau tidak sinkron, akibatnya user melihat "gagal dibuka" untuk link yang
   // expand-nya justru berhasil. Test ini menangkapnya di CI, bukan di lapangan.
   const client = await import('../src/parse.js');
-  const server = await import('../api/expand.ts');
+  const server = await import('../api/expand.js');
 
   const a = [...client.MAPS_HOSTS].sort();
   const b = [...server.MAPS_HOSTS].sort();

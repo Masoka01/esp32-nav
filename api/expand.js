@@ -80,16 +80,20 @@ for (const cc of GOOGLE_MAPS_CC)
 const MAX_HOPS = 5;
 const TIMEOUT_MS = 5000;
 
-export interface ExpandResult {
-  ok: boolean;
-  /** URL akhir yang sudah berisi koordinat. Hanya ada kalau ok. */
-  url?: string;
-  /** Alasan penolakan, kalau gagal. Dipakai untuk diagnostik di UI. */
-  reason?: string;
-}
+/**
+ * @typedef {{ ok: boolean, url?: string, reason?: string }} ExpandResult
+ * @property {boolean} ok
+ * @property {string} [url] URL akhir yang sudah berisi koordinat. Hanya ada kalau ok.
+ * @property {string} [reason] Alasan penolakan, kalau gagal. Dipakai untuk diagnostik di UI.
+ */
 
 /** goo.gl hanya sah kalau path-nya diawali /maps, sama seperti src/parse.js. */
-function isShortLink(u: URL): boolean {
+/**
+ * goo.gl hanya sah kalau path-nya diawali /maps, sama seperti src/parse.js.
+ * @param {URL} u
+ * @returns {boolean}
+ */
+function isShortLink(u) {
   if (u.hostname === 'maps.app.goo.gl') return true;
   return u.hostname === 'goo.gl' && u.pathname.startsWith('/maps');
 }
@@ -101,12 +105,29 @@ function isShortLink(u: URL): boolean {
  * https://www.google.com/ (halaman utama) bukan link peta, dan menerimanya
  * akan membuat UI menampilkan "berhasil" tanpa koordinat apa pun.
  */
-export function isMapsHost(u: URL): boolean {
+/**
+ * Host peta Google, hanya dari allowlist eksplisit di atas.
+ *
+ * Path-nya juga wajib diawali /maps: goo.gl redirect ke
+ * https://www.google.com/ (halaman utama) bukan link peta, dan menerimanya
+ * akan membuat UI menampilkan "berhasil" tanpa koordinat apa pun.
+ *
+ * @param {URL} u
+ * @returns {boolean}
+ */
+export function isMapsHost(u) {
   return MAPS_HOSTS.has(u.hostname.toLowerCase()) && u.pathname.startsWith('/maps');
 }
 
 /** Host yang boleh disentuh pada hop ke-`n`. */
-function hostAllowed(u: URL, hop: number): boolean {
+/**
+ * Host yang boleh disentuh pada hop ke-`n`.
+ *
+ * @param {URL} u
+ * @param {number} hop
+ * @returns {boolean}
+ */
+function hostAllowed(u, hop) {
   if (hop === 0) return isShortLink(u);
   return isShortLink(u) || isMapsHost(u);
 }
@@ -116,13 +137,20 @@ function hostAllowed(u: URL, hop: number): boolean {
  *
  * `fetchImpl` dan `deadline` diinjeksi supaya seluruh percabangan bisa diuji
  * tanpa jaringan dan tanpa menunggu detik.
+ *
+ * @param {string} input
+ * @param {typeof fetch} [fetchImpl] Disuntikkan supaya test bisa mengarahkan
+ *   rantai redirect sendiri, tanpa jaringan.
+ * @param {number} [deadline] Epoch ms. Batas waktu total, dibagi seluruh hop.
+ * @returns {Promise<ExpandResult>}
  */
 export async function expandShortLink(
-  input: string,
-  fetchImpl: typeof fetch = fetch,
-  deadline: number = Date.now() + TIMEOUT_MS,
-): Promise<ExpandResult> {
-  let current: URL;
+  input,
+  fetchImpl = fetch,
+  deadline = Date.now() + TIMEOUT_MS,
+) {
+  /** @type {URL} */
+  let current;
   try {
     current = new URL(String(input || '').trim());
   } catch {
@@ -137,7 +165,8 @@ export async function expandShortLink(
     const left = deadline - Date.now();
     if (left <= 0) return { ok: false, reason: 'timeout' };
 
-    let res: Response;
+    /** @type {Response} */
+    let res;
     try {
       // `manual` — bukan `follow`. Lihat catatan keamanan di atas file ini.
       res = await fetchImpl(current.href, {
@@ -177,19 +206,21 @@ export async function expandShortLink(
 // Bentuk req/res dideklarasikan lokal, bukan diimpor dari @vercel/node,
 // supaya project ini tetap tanpa node_modules.
 
-interface HandlerRequest {
-  method?: string;
-  url?: string;
-  query?: Record<string, string | string[]>;
-}
-
-interface HandlerResponse {
-  status(code: number): HandlerResponse;
-  setHeader(name: string, value: string): void;
-  json(body: unknown): void;
-}
-
-export default async function handler(req: HandlerRequest, res: HandlerResponse) {
+/**
+ * @typedef {Object} HandlerRequest
+ * @property {string} [method]
+ * @property {string} [url]
+ * @property {Record<string, string|string[]>} [query]
+ *
+ * @typedef {Object} HandlerResponse
+ * @property {(code: number) => HandlerResponse} status
+ * @property {(name: string, value: string) => void} setHeader
+ * @property {(body: unknown) => void} json
+ *
+ * @param {HandlerRequest} req
+ * @param {HandlerResponse} res
+ */
+export default async function handler(req, res) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     res.status(405).json({ ok: false, reason: 'method-not-allowed' });

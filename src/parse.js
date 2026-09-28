@@ -27,7 +27,7 @@ const MAPS_NUM = '-?\\d+(?:\\.\\d+)?';
 // satu entri di sini — jangan longgarkan pencocokan di isGoogleMapsHost(),
 // karena konsekuensinya host milik orang lain ikut diterima.
 //
-// Daftar ini harus identik dengan GOOGLE_MAPS_CC di api/expand.ts; lihat
+// Daftar ini harus identik dengan GOOGLE_MAPS_CC di api/expand.js; lihat
 // catatan sinkronisasi di parseMapsLink().
 const GOOGLE_MAPS_CC = [
   'com', 'co.id', 'co.uk', 'com.br', 'co.jp', 'com.au', 'co.in', 'com.mx',
@@ -77,7 +77,7 @@ export function parseMapsLink(text) {
   // peta dari negara yang belum terdaftar tidak terbaca — annoying, bukan
   // berbahaya, dan bookmarklet masih ada.
   //
-  // Aturan ini WAJIB identik dengan isMapsHost() di api/expand.ts. Keduanya
+  // Aturan ini WAJIB identik dengan isMapsHost() di api/expand.js. Keduanya
   // sengaja diduplikasi, bukan di-share: yang ini jalan di browser sebagai ES
   // module, yang di sana di server sebagai TypeScript tanpa bundler. Kalau
   // salah sinkron, URL hasil expand akan ditolak parser dan user melihat

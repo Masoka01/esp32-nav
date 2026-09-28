@@ -10,7 +10,7 @@
 // same-origin dan tidak butuh header CORS apa pun.
 //
 // Yang TIDAK ada di sini: validasi host. Allowlist ada di server
-// (api/expand.ts) dan di parser (parse.js). Client cukup meneruskan link,
+// (api/expand.js) dan di parser (parse.js). Client cukup meneruskan link,
 // menerima URL akhir, lalu memparsenya ulang lewat jalur yang biasa —
 // sehingga hanya ada satu tempat yang memutuskan sah atau tidak.
 

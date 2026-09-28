@@ -37,5 +37,5 @@
   // sw.js (butuh lib WebWorker yang bentrok dengan DOM). Keduanya sudah
   // dijaga test-nya masing-masing: test_pwa.mjs untuk sw.js, dan test/*.mjs
   // untuk modul src.
-  "include": ["src/**/*.js", "src/**/*.d.ts", "api/**/*.ts"]
+  "include": ["src/**/*.js", "src/**/*.d.ts", "api/**/*.js"]
 }
