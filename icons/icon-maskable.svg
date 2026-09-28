@@ -1,0 +1,26 @@
+<!--
+  Varian MASKABLE untuk Android.
+
+  Kenapa ada dua: Android memotong ikon launcher jadi squircles/p lingkaran.
+  Ikon "any" yang terisi sampai tepi akan kehilangan bagian penting. Varian ini
+  membuat konten mengecil ke safe zone (80% tengah) dengan latar penuh, jadi
+  apa pun bentuk launcher-nya, jarum dan rute tetap utuh.
+
+  Aturan mainnya: yang penting (jarum) TIDAK boleh keluar dari lingkaran
+  tengah 80%. Elemen dekoratif boleh lebih dekat ke tepi.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Latar PENUH. Kalau transparan, tiap OEM launcher akan memilih warna
+       latarnya sendiri, dan hasilnya terlihat beda antar HP. -->
+  <rect width="512" height="512" fill="#0f1117"/>
+
+  <g transform="translate(256 256) scale(0.8) translate(-256 -256)">
+    <path d="M96 416 L96 336 Q96 272 160 272 L288 272"
+          fill="none" stroke="#2ecc8a" stroke-width="34"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M256 96 C 205 96 164 137 164 188 C 164 258 256 400 256 400
+             C 256 400 348 258 348 188 C 348 137 307 96 256 96 Z"
+          fill="#4f8ef7"/>
+    <circle cx="256" cy="188" r="46" fill="#0f1117"/>
+  </g>
+</svg>

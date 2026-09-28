@@ -4,6 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>ESP32 Navigator</title>
+  <!-- PWA: tanpa manifest + service worker, Chrome hanya bisa membuat shortcut,
+       bukan aplikasi. Path relatif supaya tetap jalan di domain apa pun. -->
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="theme-color" content="#0f1117" />
+  <meta name="description" content="Navigasi jalan/pejalan kaki via Google Maps, dikirim ke ESP32 lewat Bluetooth." />
+  <link rel="icon" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -1538,6 +1545,27 @@ function toast(msg) {
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// ══════════════════════════════════════════════
+//  SERVICE WORKER
+// ══════════════════════════════════════════════
+//
+// Tanpa service worker terdaftar, Chrome tidak mau memasang aplikasi (hanya
+// shortcut). Pendaftaran gagal diam-diam di localhost/file:// karena keduanya
+// bukan secure context, jadi kegagalan tidak perlu Permissions-Policy yang
+// akan menggoda developer untuk menambahkan header yang tidak perlu.
+//
+// Service worker ini sengaja hanya meng-cache shell: rute OSRM dan tile peta
+// SELALU network-only. Rute basi lebih buruk daripada peta kosong. Lihat
+// sw.js untuk aturan lengkapnya.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {
+      // Tidak fatal: aplikasi tetap jalan normal, cuma tidak bisa di-install
+      // sampai service worker berhasil terdaftar.
+    });
+  });
 }
 
 // Dipanggil terakhir, setelah semua fungsi di atas terdefinisi.

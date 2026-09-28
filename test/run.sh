@@ -36,6 +36,7 @@ run "cross-check: web → firmware"  ./build/test_cross
 run "web: payload & ikon"          node test_web.mjs
 run "web: wake lock"               node test_wake.mjs
 run "web: persistensi tujuan"      node test_trip.mjs
+run "web: PWA (manifest & cache)"  node test_pwa.mjs
 
 echo
 if [ "$fail" -eq 0 ]; then

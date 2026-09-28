@@ -1,0 +1,25 @@
+<!--
+  Ikon app ESP32 Navigator.
+
+ WARNA DISINKRONKAN dengan token CSS di index.html (:root). Kalau salah satu
+  berubah, ikut ubah yang di sini juga supaya launcher Android tidak terlihat
+  seperti aplikasi lain.
+
+  Struktur: jarum navigasi biru (accent) di atas garis rute hijau (accent2),
+  dengan latar app (bg). Bentuk dipilih supaya tetap terbaca di 48px.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#0f1117"/>
+
+  <!-- Garis rute: keluar dari kiri-bawah, belok, lalu masuk ke jarum.
+       Dipakai sebagai penanda "navigasi", bukan sekadar titik lokasi. -->
+  <path d="M96 416 L96 336 Q96 272 160 272 L288 272"
+        fill="none" stroke="#2ecc8a" stroke-width="34"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Jarum navigasi (location pin) -->
+  <path d="M256 96 C 205 96 164 137 164 188 C 164 258 256 400 256 400
+           C 256 400 348 258 348 188 C 348 137 307 96 256 96 Z"
+        fill="#4f8ef7"/>
+  <circle cx="256" cy="188" r="46" fill="#0f1117"/>
+</svg>

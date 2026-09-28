@@ -9,6 +9,13 @@ Navigasi GPS gratis: OpenStreetMap + OSRM + Web Bluetooth → ESP32 + OLED
 ```
 esp32-nav/
 ├── index.html          ← Website navigasi (upload ke hosting)
+├── manifest.json       ← Metadata PWA: nama, ikon, mode standalone
+├── sw.js               ← Service worker (syarat agar bisa di-install)
+├── icons/
+│   ├── icon.svg        ← Sumber ikon (edit lalu regenerate, lihat Test)
+│   ├── icon-192.png    ← Ikon 192px
+│   ├── icon-512.png    ← Ikon 512px
+│   └── maskable-512.png← Ikon anti-terpotong untuk Android
 ├── esp32_nav/
 │   └── esp32_nav.ino   ← Kode ESP32 (upload via Arduino IDE)
 ├── test/               ← Test host, tidak butuh board
@@ -42,16 +49,43 @@ Buka `esp32_nav/esp32_nav.ino` di Arduino IDE, pilih board **ESP32 Dev Module**,
 
 ### 2. Upload website ke hosting gratis
 
-**Opsi A — Netlify (paling mudah):**
-1. Buka [netlify.com](https://netlify.com) → Login
-2. Drag & drop file `index.html` ke dashboard
-3. Dapat link HTTPS otomatis (contoh: `https://esp32-nav.netlify.app`)
+> **Upload SELURUH folder, bukan cuma `index.html`.**
+> Kalau `manifest.json`, `sw.js`, atau `icons/` tidak ikut ter-deploy, Chrome
+> hanya bisa membuat shortcut biasa dan aplikasi tidak bisa di-install.
 
-**Opsi B — GitHub Pages:**
-1. Buat repo baru di GitHub
-2. Upload `index.html`
-3. Settings → Pages → Deploy from main branch
-4. Link: `https://username.github.io/nama-repo`
+**Opsi A — Vercel (paling mudah):**
+1. Buka [vercel.com](https://vercel.com) → Login
+2. Add New → Project, lalu pilih repo GitHub ini
+3. Framework Preset: **Other**. Biarkan Build Command kosong, Output
+   Directory: `.` — repo ini statis, tidak ada build step
+4. Deploy → dapat link HTTPS otomatis (contoh: `https://esp32-nav.vercel.app`)
+
+Alternatif tanpa akun GitHub: `npx vercel` di root repo, lalu ikut prompt.
+
+**Opsi B — Netlify:**
+1. Buka [netlify.com](https://netlify.com) → Login
+2. **Drag & drop folder `esp32-nav/`** — bukan file `index.html` saja
+3. Dapat link HTTPS otomatis
+
+**Opsi C — GitHub Pages:**
+1. Upload seluruh isi repo ke branch `main`
+2. Settings → Pages → Deploy from main branch
+3. Link: `https://username.github.io/nama-repo`
+
+### 2b. Pasang sebagai aplikasi di HP
+
+Wajib lewat **HTTPS**. Dari `file://` atau `http://192.168.x.x` tidak akan
+berhasil: Chrome memblokir service worker dan geolokasi di luar secure context,
+sehingga tidak ada install **dan** GPS tidak akan menyala.
+
+1. Buka link HTTPS di **Chrome Android**
+2. Menu `⋮` → **Install app** (atau **Add to home screen** → Install app)
+3. Kalau yang muncul hanya "Create shortcut", berarti `manifest.json` atau
+   `sw.js` belum ikut ter-deploy — cek lagi langkah 2 di atas
+
+Kalau Chrome masih menampilkan "Create shortcut" padahal semua file sudah
+ter-deploy, uninstall dulu shortcut lama, lalu muat ulang sekali. Chrome
+menyimpan status installability di cache.
 
 ---
 
@@ -192,7 +226,19 @@ sungguhan, perilaku I2C SSD1306, dan Screen Wake Lock di Chrome Android.
 ## Catatan
 
 - Web Bluetooth hanya jalan di **Chrome** (Android/Desktop)
-- Butuh **HTTPS** (makanya perlu hosting, bukan buka file lokal)
+- Butuh **HTTPS** (makanya perlu hosting, bukan buka file lokal). Secure
+  context ini juga yang mengaktifkan **GPS** — di `file://` atau HTTP biasa,
+  `getCurrentPosition` diblokir sehingga rute tidak pernah dihitung
+- Aplikasi bisa di-install sebagai PWA (ikon sendiri, tanpa address bar).
+  Chrome membangun WebAPK kalau `manifest.json` + `sw.js` + ikon lengkap dan
+  halaman sudah pernah dibuka minimal sekali di Chrome
+- `sw.js` **sengaja hanya meng-cache shell** (`index.html`, manifest, ikon)
+  dengan deny-by-default: semua request lintas-origin selalu network-only.
+  Rute OSRM dan tile peta tidak pernah di-cache — rute basi membuat user
+  diarahkan ke jalan yang salah, dan itu lebih buruk daripada peta kosong.
+  `test/test_pwa.mjs` menjaga aturan ini dari regresi
+- Setelah mengubah `sw.js`, naikkan `VERSION` di dalamnya, kalau tidak user
+  akan tetap dilayani service worker lama dari cache
 - Selama navigasi, layar HP **dijaga tetap menyala** lewat Screen Wake Lock
   API. Kalau tidak, tab akan dibekukan browser, GPS berhenti, dan OLED
   membeku pada instruksi yang sudah basi tanpa ada peringatan
