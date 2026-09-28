@@ -23,6 +23,28 @@
 // pengecualian berdasarkan prefix.
 const MAPS_NUM = '-?\\d+(?:\\.\\d+)?';
 
+// Domain ccTLD tempat Google Maps operate. Ingin menambah negara? Tambahkan
+// satu entri di sini — jangan longgarkan pencocokan di isGoogleMapsHost(),
+// karena konsekuensinya host milik orang lain ikut diterima.
+//
+// Daftar ini harus identik dengan GOOGLE_MAPS_CC di api/expand.ts; lihat
+// catatan sinkronisasi di parseMapsLink().
+const GOOGLE_MAPS_CC = [
+  'com', 'co.id', 'co.uk', 'com.br', 'co.jp', 'com.au', 'co.in', 'com.mx',
+  'com.ar', 'com.sg', 'com.my', 'com.tw', 'com.ph', 'com.vn', 'com.tr',
+  'com.ua', 'de', 'fr', 'es', 'it', 'nl', 'se', 'no', 'fi', 'dk',
+  'pl', 'co.th', 'co.kr', 'co.il', 'ae', 'co.za', 'cz', 'at', 'ch', 'be',
+  'pt', 'gr', 'ro', 'hu',
+];
+
+export const MAPS_HOSTS = new Set();
+for (const cc of GOOGLE_MAPS_CC)
+  for (const sub of ['', 'www.', 'maps.']) MAPS_HOSTS.add(`${sub}google.${cc}`);
+
+export function isGoogleMapsHost(u) {
+  return MAPS_HOSTS.has(u.hostname.toLowerCase());
+}
+
 export function validLatLng(lat, lng) {
   return Number.isFinite(lat) && Number.isFinite(lng)
       && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
@@ -40,11 +62,27 @@ export function parseMapsLink(text) {
   let u;
   try { u = new URL(raw); } catch { return { ok: false, reason: 'not-a-link' }; }
 
-  // eTLD+1 harus benar-benar milik Google. Dicek per-label, bukan pola
-  // string, supaya 'google.com.evil.example' dan 'notgoogle.com' ditolak.
-  const labels = u.hostname.toLowerCase().split('.');
-  const isGoogle = labels.slice(-2).includes('google') || labels.slice(-3).includes('google');
-  if (!isGoogle || !u.pathname.includes('/maps'))
+  // Host harus benar-benar milik Google — dicek dari allowlist PERSIS, bukan
+  // dari pola hostname.
+  //
+  // Pola seperti endsWith('.google.com') atau "hostname mengandung 'google'"
+  // kelihatan aman tapi menerima domain milik orang lain: `google.evil.com`
+  // lolos padahal registrable domain-nya `evil.com`, dan `evil.google.co`
+  // juga lolos padahal `google.co` bukan domain Google (Google memakai
+  // `google.com.co`). Confirmasi kepemilikan nama domain butuh data registrar
+  // yang tidak kita punya, jadi daftar eksplisit adalah satu-satunya opsi
+  // yang benar. Menambah negara = menambah satu entri di GOOGLE_MAPS_CC.
+  //
+  // Konsekuensinya disengaja: host di luar daftar ditolak. Itu berarti link
+  // peta dari negara yang belum terdaftar tidak terbaca — annoying, bukan
+  // berbahaya, dan bookmarklet masih ada.
+  //
+  // Aturan ini WAJIB identik dengan isMapsHost() di api/expand.ts. Keduanya
+  // sengaja diduplikasi, bukan di-share: yang ini jalan di browser sebagai ES
+  // module, yang di sana di server sebagai TypeScript tanpa bundler. Kalau
+  // salah sinkron, URL hasil expand akan ditolak parser dan user melihat
+  // "gagal dibuka" padahal expand-nya sukses.
+  if (!isGoogleMapsHost(u) || !u.pathname.startsWith('/maps'))
     return { ok: false, reason: 'not-a-link' };
 
   const safeDec = t => { try { return decodeURIComponent(t); } catch { return t; } };
