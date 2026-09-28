@@ -44,7 +44,16 @@ const src = [
   block('function maneuverCode', '  return 12;\n}'),
   block('async function writeChunks', '      await ch.writeValue(chunk);\n    }\n  }\n}'),
   block('function sendToBLE', '  return bleSendChain;\n}'),
+  block('const MAPS_NUM', '  return { ok: true, lat, lng, name, exact };\n}'),
 ].join('\n\n');
+
+// Guard: kalau endMarker tidak cocok, blok bisa terpotong dan test diam-diam
+// menguji kode yang tidak ada. Pastikan blok yang terekstrak benar-benar utuh.
+check(src.includes('function parseMapsLink'), 'blok parseMapsLink ikut terekstrak utuh');
+check(src.includes('function validLatLng'), 'helper validLatLng ikut terekstrak utuh');
+check(src.includes('maps\\.app\\.goo\\.gl'), 'blok parser memuat deteksi short link');
+check(src.includes('needs-geocode'), 'blok parser memuat jalur needs-geocode');
+
 
 const state = { bleChar: null, bleSendChain: Promise.resolve() };
 
@@ -69,7 +78,7 @@ const factory = new Function(
   'const TEXT_MAX = ' + consts.TEXT_MAX + '; const ICON_MAX = ' + consts.ICON_MAX +
   '; const BLE_CHUNK_SIZE = ' + consts.BLE_CHUNK_SIZE + ';\n' +
   'let bleSendChain = Promise.resolve();\n' +
-  src + '\nreturn { sanitizeForBLE, clampCode, normalizeDist, maneuverCode, writeChunks, sendToBLE };'
+  src + '\nreturn { sanitizeForBLE, clampCode, normalizeDist, maneuverCode, writeChunks, sendToBLE, parseMapsLink, validLatLng };'
 );
 const api = factory(state, TextEncoder, console, setImmediate);
 // ── sanitizeForBLE ──────────────────────────────────────────────────────
@@ -228,6 +237,155 @@ section('payload: tidak pernah punya byte di luar ASCII');
   const t = new TextDecoder().decode(all);
   check(/^V1\|9\|250\|/.test(t), 'header payload benar, dapat ' + JSON.stringify(t.slice(0, 14)));
   state.bleChar = null;
+}
+
+// ── parseMapsLink ────────────────────────────────────────────────────────
+section('parseMapsLink');
+{
+  const p = api.parseMapsLink;
+  const near = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
+
+  // URL milik user sungguhan. Satu-satunya pair-nya ber-prefix !8m2.
+  const WH2 = 'https://www.google.com/maps/place/WH-2+ARCHER/@-7.4450072,112.3587988,1074m'
+    + '/data=!3m2!1e3!4b1!4m6!3m5!1s0x2e78110013ed2f4b:0x8cd94e5ea237aea0'
+    + '!8m2!3d-7.4450072!4d112.3587988!16s%2Fg%2F11ntpfhd38';
+  {
+    const r = p(WH2);
+    check(r.ok === true, 'link WH-2 ARCHER terbaca');
+    check(r.name === 'WH-2 ARCHER', 'nama dari path /place/, dapat ' + JSON.stringify(r.name));
+    check(near(r.lat, -7.4450072) && near(r.lng, 112.3587988),
+          'koordinat dari !3d/!4d, dapat ' + r.lat + ',' + r.lng);
+    check(r.exact === true, 'pair tunggal = persis');
+  }
+
+  // Guard regresi inti: !8m2 TIDAK boleh dilewati.
+  {
+    const r = p('https://www.google.com.br/maps/place/Abbraccio+Cucina+Italiana'
+      + '/@-15.7202756,-47.9207687,13z/data=!4m9!1m3!2m2!1srestaurants+in+Bras%C3%ADlia!6e5'
+      + '!3m4!1s0x935a39a1395ec361:0x5c869291493e902c!8m2!3d-15.7202756!4d-47.8857498');
+    check(near(r.lng, -47.8857498),
+          'pair ber-prefix !8m2 tetap dipakai sebagai pin, dapat ' + r.lng);
+    check(!near(r.lng, -47.9207687), 'tidak jatuh ke @ viewport');
+    check(r.exact === true, 'pair tunggal ber-!8m2 tetap persis');
+  }
+
+  // Dua pair = ambigu, jangan diklaim persis.
+  {
+    const r = p('https://www.google.com/maps/place/Egypt/@26.8444558,26.3722095,6z/data=!3m1!4b1'
+      + '!4m13!1m7!3m6!1s0x0:0x0!2zMTfCsDMwJzA0!JmQ!3b1!8m2!3d17.5012212!4d74.1235132'
+      + '!3m4!1s0x14368976c35c36e9:0x2c45a00925c4c444!8m2!3d27.0982539!4d29.8828125');
+    check(near(r.lat, 17.5012212) && near(r.lng, 74.1235132), 'ambil pair pertama');
+    check(r.exact === false, 'dua pair = ambigu, exact=false');
+  }
+
+  // Tidak ada pair -> dari @ (pusat viewport), harus approx.
+  {
+    const r = p('https://www.google.com/maps/place/Eiffel+Tower/@48.858,2.294,17z');
+    check(near(r.lat, 48.858) && near(r.lng, 2.294), 'koordinat dari @ viewport');
+    check(r.exact === false, '@ viewport bukan pin -> approx');
+    check(r.name === 'Eiffel Tower', 'nama dari path tanpa !2s');
+  }
+
+  // Jebakan zoom: digit zoom tidak boleh ikut terparse.
+  {
+    const r = p('https://www.google.com/maps/place/X/@-6.2088,106.8456,17z');
+    check(near(r.lat, -6.2088) && near(r.lng, 106.8456),
+          'zoom 17z tidak terserap, dapat ' + r.lat + ',' + r.lng);
+  }
+  {
+    const r = p('https://www.google.com/maps/place/X/@-7.4450072,112.3587988,1074m');
+    check(near(r.lng, 112.3587988), 'zoom 1074m tidak terserap');
+  }
+
+  // Bentuk koordinat eksplisit.
+  {
+    const r = p('https://www.google.com/maps/search/?api=1&query=-6.2088,106.8456');
+    check(r.ok && near(r.lat, -6.2088) && near(r.lng, 106.8456) && r.exact === true,
+          '?query=LAT,LNG dianggap koordinat persis');
+  }
+  {
+    const r = p('https://www.google.com/maps/place/X/@-6.2,106.8,12z?ll=-6.2088,106.8456');
+    check(r.ok && near(r.lat, -6.2088) && near(r.lng, 106.8456) && r.exact === true,
+          '?ll=LAT,LNG dipakai dan dianggap persis');
+  }
+
+  // Hanya nama -> needs-geocode, nama harus ter-decode dengan spasi.
+  {
+    const r = p('https://www.google.com/maps/search/?api=1&query=Monas%20Jakarta');
+    check(r.ok === false && r.reason === 'needs-geocode', 'nama saja -> needs-geocode');
+    check(r.name === 'Monas Jakarta', 'nama ter-decode, dapat ' + JSON.stringify(r.name));
+  }
+
+  // Short link.
+  {
+    const r = p('https://maps.app.goo.gl/duSRki9gmgdUBotg9');
+    check(r.ok === false && r.reason === 'short-link', 'short link ditolak');
+  }
+  {
+    const r = p('https://goo.gl/maps/abcdef');
+    check(r.ok === false && r.reason === 'short-link', 'goo.gl/maps juga short link');
+  }
+
+  // Bukan Google Maps.
+  {
+    check(p('https://example.com/maps/place/foo').reason === 'not-a-link', 'domain lain');
+    check(p('Jakarta').reason === 'not-a-link', 'ketik alamat biasa bukan link');
+    check(p('').reason === 'not-a-link', 'input kosong');
+    check(p('   ').reason === 'not-a-link', 'spasi saja');
+  }
+
+  // Domain Google lain yang sah.
+  {
+    const r = p('https://www.google.co.id/maps/place/Monas/@-6.1754,106.8272,17z');
+    check(r.ok === true && r.name === 'Monas', 'google.co.id diterima');
+  }
+  {
+    const r = p('https://www.google.com.br/maps/place/Teste/@-15.79,-47.88,13z');
+    check(r.ok === true, 'google.com.br diterima');
+  }
+
+  // Domain yang menyerupai Google harus ditolak.
+  {
+    check(p('https://google.com.evil.example/maps/place/foo').reason === 'not-a-link',
+          'google.com.evil.example ditolak');
+    check(p('https://notgoogle.com/maps/place/foo').reason === 'not-a-link',
+          'notgoogle.com ditolak');
+  }
+
+  // Nama dari !2s.
+  {
+    const r = p('https://www.google.com/maps/place/X/@-6.2,106.8,12z/data=!4m2!2sKopi%20Rindu');
+    check(r.name === 'Kopi Rindu', 'nama dari !2s, dapat ' + JSON.stringify(r.name));
+  }
+
+  // Koordinat di luar rentang harus ditolak.
+  {
+    const r = p('https://www.google.com/maps/place/X/@999.5,106.8,12z');
+    check(r.ok === false, 'lat di luar rentang ditolak');
+  }
+  {
+    const r = p('https://www.google.com/maps/place/X/@-6.2,999.5,12z');
+    check(r.ok === false, 'lng di luar rentang ditolak');
+  }
+
+  // /dir/: tujuan = segmen terakhir, bukan yang pertama.
+  {
+    const r = p('https://www.google.com/maps/dir/-6.2,106.8/-6.9,107.6');
+    check(r.ok && near(r.lat, -6.9) && near(r.lng, 107.6),
+          '/dir/ ambil segmen terakhir, dapat ' + r.lat + ',' + r.lng);
+    check(r.exact === true, 'koordinat /dir/ dianggap persis');
+  }
+  {
+    const r = p('https://www.google.com/maps/dir/Jakarta/Monumen+Nasional/@-6.2,106.8,12z');
+    check(r.ok === false && r.reason === 'needs-geocode', '/dir/ berbasis nama -> needs-geocode');
+    check(r.name === 'Monumen Nasional', 'nama tujuan /dir/, dapat ' + JSON.stringify(r.name));
+  }
+
+  // Latitude selalu lebih dulu di URL Google — jangan tertukar.
+  {
+    const r = p(WH2);
+    check(r.lat < 0 && r.lng > 0, 'lat negatif & lng positif: urutan tidak tertukar');
+  }
 }
 
 console.log('\n─────────────────────────────');

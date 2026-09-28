@@ -65,6 +65,22 @@ Buka `esp32_nav/esp32_nav.ino` di Arduino IDE, pilih board **ESP32 Dev Module**,
 6. Tap **Mulai Navigasi**
 7. Instruksi otomatis dikirim ke OLED ESP32!
 
+### Cara paling cepat dapat koordinat dari Google Maps
+
+Kolom pencarian menerima **link Google Maps** secara langsung. Ini cara paling
+andal untuk tujuan yang tidak ketemu lewat pencarian biasa, karena koordinatnya
+diambil langsung dari pin Google — bukan diterka dari database geocoder.
+
+1. Di Google Maps, pilih lokasi → **Share** → **Copy link**
+2. Paste ke kolom pencarian di aplikasi ini
+3. Muncul baris konfirmasi berisi nama, koordinat, dan label
+   - **persis** — koordinat diambil dari pin asli (`!3d/!4d`)
+   - **perkiraan — pusat layar Google Maps** — hanya pusat layar, bisa jauh dari pin
+4. Tap **Pakai tujuan ini**
+
+Baris konfirmasi sengaja tidak langsung merute: aplikasi ini dipakai sambil
+mengendarai, jadi tujuan yang salah harus dicek mata dulu.
+
 ---
 
 ## Protokol BLE

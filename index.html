@@ -121,6 +121,39 @@
     .suggestion-item:last-child { border-bottom: none; }
     .suggestion-item:hover { background: var(--surface); color: var(--accent); }
 
+    /* Konfirmasi tujuan hasil parse link Google Maps.
+       Pakai token & gaya tombol yang sama dengan .suggestion-item dan
+       #btn-start supaya tidak lahir bahasa visual baru. */
+    #maps-confirm {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0; right: 0;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      z-index: 2001;
+      padding: 12px;
+      display: none;
+    }
+    #maps-confirm .mc-name { font-size: 13px; color: var(--text); line-height: 1.4; }
+    #maps-confirm .mc-coord {
+      font-family: var(--mono); font-size: 12px;
+      color: var(--text-muted); margin-top: 4px;
+    }
+    #maps-confirm .mc-tag {
+      display: inline-block; margin-top: 8px;
+      font-size: 11px; padding: 2px 8px; border-radius: 999px;
+      border: 1px solid var(--border); color: var(--text-muted);
+    }
+    #maps-confirm .mc-tag.approx { color: #d8a13a; border-color: #d8a13a; }
+    #maps-confirm .mc-actions { display: flex; gap: 8px; margin-top: 10px; }
+    #maps-confirm button {
+      flex: 1; padding: 9px 12px; font-size: 13px; font-family: var(--font);
+      border-radius: 8px; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text); cursor: pointer;
+    }
+    #maps-confirm button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
     #btn-locate {
       background: var(--surface2);
       border: 1px solid var(--border);
@@ -318,6 +351,7 @@
         <span class="search-icon">🔍</span>
         <input id="search-input" type="text" placeholder="Cari tujuan..." autocomplete="off" />
         <div id="suggestions"></div>
+        <div id="maps-confirm"></div>
       </div>
       <button id="btn-locate" title="Lokasi saya">📍</button>
     </div>
@@ -363,6 +397,7 @@
 const state = {
   userLat: null, userLng: null,
   destLat: null, destLng: null,
+  destName: null,
   steps: [],
   currentStep: 0,
   navigating: false,
@@ -474,14 +509,273 @@ function renderSuggestions(items) {
 }
 
 document.addEventListener('click', e => {
-  if (!e.target.closest('.search-wrap')) suggestionsEl.style.display = 'none';
+  if (e.target.closest('.search-wrap')) return;
+  suggestionsEl.style.display = 'none';
+  hideConfirm();
 });
+
+// ══════════════════════════════════════════════
+//  PARSE LINK GOOGLE MAPS
+// ══════════════════════════════════════════════
+//
+// Format URL Google Maps tidak terdokumentasi resmi dan sudah beberapa kali
+// berubah bentuk, jadi ini parser best-effort berlapis fallback.
+//
+// ⚠️ ATURAN YANG SUDAH DIBUKTIKAN DENGAN DATA ASLI:
+// Pasangan !3d/!4d boleh ber-prefix !8m2, dan itu JUSTRU encoding standar
+// untuk pin tempat. Link milik user (WH-2 ARCHER) hanya punya satu pair dan
+// ber-prefix !8m2. Kalau prefix !8m2 dilewati, link itu jadi nol hasil lalu
+// jatuh ke '@' yang berbeda ~284 meter. Jadi: ambil pair PERTAMA, tanpa
+// pengecualian berdasarkan prefix.
+const MAPS_NUM = '-?\\d+(?:\\.\\d+)?';
+
+function validLatLng(lat, lng) {
+  return Number.isFinite(lat) && Number.isFinite(lng)
+      && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+}
+
+function parseMapsLink(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return { ok: false, reason: 'not-a-link' };
+
+  // Short link tidak bisa di-expand dari browser: CORS melarang membaca
+  // target redirect. Harus dibuka sekali di Chrome lalu disalin dari address bar.
+  if (/^https?:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps)(\/|$)/i.test(raw))
+    return { ok: false, reason: 'short-link' };
+
+  let u;
+  try { u = new URL(raw); } catch { return { ok: false, reason: 'not-a-link' }; }
+
+  // eTLD+1 harus benar-benar milik Google. Dicek per-label, bukan pola
+  // string, supaya 'google.com.evil.example' dan 'notgoogle.com' ditolak.
+  const labels = u.hostname.toLowerCase().split('.');
+  const isGoogle = labels.slice(-2).includes('google') || labels.slice(-3).includes('google');
+  if (!isGoogle || !u.pathname.includes('/maps'))
+    return { ok: false, reason: 'not-a-link' };
+
+  const safeDec = t => { try { return decodeURIComponent(t); } catch { return t; } };
+  const dec     = t => { try { return decodeURIComponent(t.replace(/\+/g, ' ')); } catch { return t.replace(/\+/g, ' '); } };
+  const s = safeDec(raw);
+
+  const coordPair = str => {
+    const m = String(str).trim().match(new RegExp(`^(${MAPS_NUM})\\s*,\\s*(${MAPS_NUM})$`));
+    if (!m) return null;
+    const lat = parseFloat(m[1]), lng = parseFloat(m[2]);
+    return validLatLng(lat, lng) ? { lat, lng } : null;
+  };
+
+  // ── Nama ──────────────────────────────────────────────────────────────
+  // Penting: link WH-2 ARCHER tidak punya !2s sama sekali — namanya hanya
+  // ada di path /place/. Jadi sumber nama dari path itu wajib, bukan pelengkap.
+  const m2s    = s.match(/!2s([^!]+)/);
+  const mPlace = s.match(/\/place\/([^/@?]+)/);
+  // Tujuan pada /dir/ adalah segmen TERAKHIR, bukan yang pertama.
+  const dirSegs = (u.pathname.split('/dir/')[1] || '').split('/')
+    .filter(x => x && !x.startsWith('@') && !x.includes('=')).map(dec);
+  const dirDest  = dirSegs.length ? dirSegs[dirSegs.length - 1] : '';
+  const dirCoord = coordPair(dirDest);
+  // 'query' adalah nama parameter pada format resmi Maps URLs API
+  // (?api=1&query=...), jadi harus ikut dibaca di samping q/ll/daddr.
+  const qVal   = (u.searchParams.get('query') || u.searchParams.get('q')
+               || u.searchParams.get('ll') || u.searchParams.get('daddr') || '').trim();
+  const qCoord = coordPair(qVal);
+  // Tujuan /dir/ berupa nama, bukan koordinat. Penting untuk keputusan di bawah.
+  const isDirNamed = !!(dirDest && !dirCoord);
+
+  const fallbackName = 'Tujuan dari Google Maps';
+  const name = (m2s && dec(m2s[1]))
+    || (mPlace && dec(mPlace[1]))
+    || (dirDest && !dirCoord ? dirDest : '')
+    || (qVal && !qCoord ? qVal : '')
+    || fallbackName;
+
+  // ── Koordinat, dari paling akurat ke paling kasar ─────────────────────
+  const pairs = [...s.matchAll(new RegExp(`!3d(${MAPS_NUM})!4d(${MAPS_NUM})`, 'g'))];
+  let lat, lng, exact = false;
+
+  if (pairs.length) {
+    lat = parseFloat(pairs[0][1]);
+    lng = parseFloat(pairs[0][2]);
+    // Lebih dari satu pair = ambigu (mis. pencarian lintas area), bukan satu
+    // pin. Tetap pakai yang pertama, tapi jangan diklaim 'persis'.
+    exact = pairs.length === 1;
+  } else {
+    // Koordinat eksplisit lebih akurat daripada '@', jadi dicek lebih dulu.
+    if (dirCoord) { lat = dirCoord.lat; lng = dirCoord.lng; exact = true; }
+    else if (qCoord) { lat = qCoord.lat;  lng = qCoord.lng;  exact = true; }
+    else {
+      // '@lat,lng' adalah pusat viewport, bukan pin. Regex berhenti sebelum
+      // zoom supaya '@lat,lng,17z' tidak ikut memakan angka zoom.
+      //
+      // TAPI jangan pakai '@' kalau tujuan /dir/ berupa NAMA: pada URL
+      // directions, viewport berada di TENGAH rute, bukan di tujuan. Memakainya
+      // akan merute ke tengah perjalanan — lebih buruk daripada gagal.
+      const at = isDirNamed
+        ? null
+        : s.match(new RegExp(`@(${MAPS_NUM}),(${MAPS_NUM})(?:,|$)`));
+      if (at) { lat = parseFloat(at[1]); lng = parseFloat(at[2]); exact = false; }
+      else return (name !== fallbackName)
+        ? { ok: false, reason: 'needs-geocode', name }
+        : { ok: false, reason: 'no-coords' };
+    }
+  }
+
+  if (!validLatLng(lat, lng)) return { ok: false, reason: 'no-coords' };
+  return { ok: true, lat, lng, name, exact };
+}
+
+// ══════════════════════════════════════════════
+//  KONFIRMASI TUJUAN DARI LINK
+// ══════════════════════════════════════════════
+const confirmEl = document.getElementById('maps-confirm');
+
+function hideConfirm() { confirmEl.style.display = 'none'; }
+
+function showConfirm(res) {
+  confirmEl.innerHTML = '';
+
+  const nameEl = document.createElement('div');
+  nameEl.className = 'mc-name';
+  nameEl.textContent = res.name;
+
+  const coordEl = document.createElement('div');
+  coordEl.className = 'mc-coord';
+  coordEl.textContent = res.lat.toFixed(5) + ', ' + res.lng.toFixed(5);
+
+  // '!3d/!4d' = pin asli. '@' = pusat layar Google Maps yang bisa jauh dari
+  // pin, jadi koordinat seperti itu tidak boleh tampil tanpa label peringatan.
+  const tagEl = document.createElement('span');
+  tagEl.className = res.exact ? 'mc-tag' : 'mc-tag approx';
+  tagEl.textContent = res.exact ? 'persis' : 'perkiraan — pusat layar Google Maps';
+
+  const actions = document.createElement('div');
+  actions.className = 'mc-actions';
+
+  const useBtn = document.createElement('button');
+  useBtn.className = 'primary';
+  useBtn.textContent = 'Pakai tujuan ini';
+  useBtn.addEventListener('click', () => {
+    hideConfirm();
+    suggestionsEl.style.display = 'none';
+    searchInput.value = res.name;
+    selectDestination(res.lat, res.lng, res.name);
+  });
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Batal';
+  cancelBtn.addEventListener('click', () => {
+    hideConfirm();
+    searchInput.value = '';
+  });
+
+  actions.append(useBtn, cancelBtn);
+  confirmEl.append(nameEl, coordEl, tagEl, actions);
+  confirmEl.style.display = 'block';
+  suggestionsEl.style.display = 'none';
+}
+
+// Sengaja TIDAK memanggil selectDestination langsung. Aplikasi ini dipakai
+// sambil mengendarai, dan tujuan yang salah akan mengarahkan ke tempat keliru
+// di jalan. Baris konfirmasi memaksa user melambat dan membaca dulu.
+function handleMapsInput(text) {
+  const res = parseMapsLink(text);
+  if (res.ok) { showConfirm(res); return true; }
+  if (res.reason === 'short-link') {
+    hideConfirm();
+    toast('Link pendek tidak bisa dibaca. Buka di Chrome lalu salin dari address bar.');
+    return true;
+  }
+  if (res.reason === 'needs-geocode' && res.name) {
+    hideConfirm();
+    searchInput.value = res.name;
+    fetchSuggestions(res.name);
+    return true;
+  }
+  return false; // teks biasa — biarkan jalur Nominatim yang sudah ada
+}
+
+searchInput.addEventListener('paste', e => {
+  const text = (e.clipboardData || window.clipboardData).getData('text');
+  if (handleMapsInput(text)) e.preventDefault();
+});
+
+searchInput.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  if (handleMapsInput(searchInput.value)) e.preventDefault();
+});
+
+// ══════════════════════════════════════════════
+//  SIMPAN PERJALANAN (bertahan saat refresh)
+// ══════════════════════════════════════════════
+//
+// sessionStorage, bukan localStorage: harus selamat dari refresh DAN crash,
+// tapi harus hilang begitu tab ditutup. Kalau localStorage, membuka aplikasi
+// esok hari akan menghidupkan kembali tujuan dari kemarin.
+const TRIP_KEY = 'esp32nav.trip';
+
+function saveTrip() {
+  try {
+    if (state.destLat === null || state.destLng === null) return;
+    sessionStorage.setItem(TRIP_KEY, JSON.stringify({
+      lat: state.destLat, lng: state.destLng,
+      name: state.destName, step: state.currentStep,
+    }));
+  } catch { /* storage penuh / private mode: bukan alasan gagalkan navigasi */ }
+}
+
+function loadTrip() {
+  try {
+    const raw = sessionStorage.getItem(TRIP_KEY);
+    if (!raw) return null;
+    const t = JSON.parse(raw);
+    if (!t || !validLatLng(t.lat, t.lng)) { clearStoredTrip(); return null; }
+    return t;
+  } catch { return null; }
+}
+
+function clearStoredTrip() {
+  try { sessionStorage.removeItem(TRIP_KEY); } catch { /* abaikan */ }
+}
+
+// Refresh di tengah perjalanan tidak boleh menghapus tujuan. GPS/BLE/wake
+// lock sengaja TIDAK dipulihkan: semuanya butuh user gesture, dan
+// memulihkannya diam-diam akan menghasilkan state navigasi yang rusak.
+async function restoreTrip() {
+  const t = loadTrip();
+  if (!t) return;
+
+  state.destLat = t.lat;
+  state.destLng = t.lng;
+  state.destName = t.name || 'Tujuan';
+  searchInput.value = state.destName;
+
+  if (state.destMarker) state.destMarker.setLatLng([t.lat, t.lng]);
+  else state.destMarker = L.marker([t.lat, t.lng], { icon: destIcon }).addTo(map);
+
+  if (!state.userLat) {
+    toast('Tujuan dipulihkan. Aktifkan GPS untuk menghitung rute.');
+    return;
+  }
+  setInstruction('⏳', 'Menghitung rute...');
+  await fetchRoute();
+
+  // Clamp: rute hasil hitung ulang bisa lebih pendek, currentStep tidak boleh
+  // keluar rentang.
+  if (state.steps.length) {
+    state.currentStep = Math.min(t.step || 0, state.steps.length - 1);
+    showNavControls();
+    updateInstructionUI();
+  }
+}
 
 // ══════════════════════════════════════════════
 //  ROUTING / OSRM
 // ══════════════════════════════════════════════
 async function selectDestination(lat, lng, name) {
   state.destLat = lat; state.destLng = lng;
+  state.destName = name || 'Tujuan';
+  state.currentStep = 0;
+  saveTrip();
 
   if (state.destMarker) state.destMarker.setLatLng([lat, lng]);
   else state.destMarker = L.marker([lat, lng], { icon: destIcon }).addTo(map);
@@ -629,6 +923,7 @@ function startNavigation() {
   if (!state.steps.length) { toast('Cari tujuan dulu'); return; }
   state.navigating = true;
   state.currentStep = 0;
+  saveTrip();
   updateInstructionUI();
   const first = currentInstructionPayload();
   if (first) sendToBLE(first.code, first.text, first.dist);
@@ -670,6 +965,9 @@ function updateInstructionUI() {
   const s = state.steps[state.currentStep];
   if (!s) return;
   setInstruction(s.icon, s.instruction, formatDist(s.distance));
+  // Persistensi langkah: user supaya setelah refresh tidak melempar mundur
+  // ke manifold pertama di tengah perjalanan.
+  saveTrip();
 }
 
 function setInstruction(icon, text, dist = '') {
@@ -979,6 +1277,9 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
 }
+
+// Dipanggil terakhir, setelah semua fungsi di atas terdefinisi.
+restoreTrip();
 </script>
 </body>
 </html>

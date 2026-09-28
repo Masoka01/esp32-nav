@@ -35,6 +35,7 @@ run "firmware: logika .ino"        ./build/test_firmware
 run "cross-check: web → firmware"  ./build/test_cross
 run "web: payload & ikon"          node test_web.mjs
 run "web: wake lock"               node test_wake.mjs
+run "web: persistensi tujuan"      node test_trip.mjs
 
 echo
 if [ "$fail" -eq 0 ]; then
