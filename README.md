@@ -11,6 +11,10 @@ esp32-nav/
 ├── index.html          ← Website navigasi (upload ke hosting)
 ├── esp32_nav/
 │   └── esp32_nav.ino   ← Kode ESP32 (upload via Arduino IDE)
+├── test/               ← Test host, tidak butuh board
+│   ├── run.sh          ← bash test/run.sh
+│   ├── payloads.txt    ← Data payload bersama web ↔ firmware
+│   └── ...
 └── README.md
 ```
 
@@ -113,10 +117,46 @@ dan `|`), jadi website yang salah kirim tidak akan merusak layar.
 
 ---
 
+## Test
+
+Semua test berjalan di host — **tidak butuh board ESP32, tidak butuh
+`arduino-cli`**, tidak butuh Chrome. Logika di dalam `esp32_nav.ino` diuji
+lewat stub Arduino/BLE (`test/stubs.h`), dan logika di `index.html`
+diekstrak langsung lalu dijalankan di Node, jadi yang diuji adalah kode
+yang benar-benar terkirim dan diterima.
+
+```bash
+bash test/run.sh
+```
+
+| Suite | Isi | Check |
+|---|---|---|
+| `test_firmware.cpp` | `formatDist`, sanitasi, parsing, geometri 13 ikon, batas layar, pemenggalan footer, framing BLE, antrean penuh, callback koneksi | 123 |
+| `test_cross.cpp` | Payload dipecah jadi chunk 20 byte, di-feed ke firmware, hasilnya dibandingkan baris demi baris | 40 |
+| `test_web.mjs` | `sanitizeForBLE`, `clampCode`, `normalizeDist`, 23 kasus `maneuverCode`, format payload, pemecahan chunk, antrean kirim | 91 |
+| `test_wake.mjs` | Acquire/release wake lock, reacquire saat `visibilitychange`, fallback audio, kondisi gagal | 42 |
+
+`test/payloads.txt` adalah sumber data bersama: byte yang dikirim web
+dipakai `test_cross.cpp` untuk membuktikan firmware meng-assemble dan
+meng-parse-nya dengan hasil yang sama.
+
+Yang **tidak** bisa diuji tanpa hardware: integrasi library Asix BLE
+sungguhan, perilaku I2C SSD1306, dan Screen Wake Lock di Chrome Android.
+
 ## Catatan
 
 - Web Bluetooth hanya jalan di **Chrome** (Android/Desktop)
 - Butuh **HTTPS** (makanya perlu hosting, bukan buka file lokal)
+- Selama navigasi, layar HP **dijaga tetap menyala** lewat Screen Wake Lock
+  API. Kalau tidak, tab akan dibekukan browser, GPS berhenti, dan OLED
+  membeku pada instruksi yang sudah basi tanpa ada peringatan
+  - Baterai terkuras lebih cepat karena layar terus menyala. Turunkan
+    kecerahan layar selama navigasi
+  - Batasnya: Wake Lock hanya mencegah timeout layar. Kalau kamu pindah ke
+    aplikasi lain atau mengunci HP manual, lock tetap dilepas dan navigasi
+    bisa terputus
+  - Kalau permintaan wakelock ditolak (battery saver, baterai lemah), aplikasi
+    menampilkan peringatan di bawah tombol navigasi
 - OSRM public API cocok untuk pemakaian pribadi (ada rate limit wajar)
 - Pencarian lokasi memakai **Nominatim** dengan `countrycodes=id` (hanya
   Indonesia). Debounce **1000 ms** + cache, karena kebijakan usage
