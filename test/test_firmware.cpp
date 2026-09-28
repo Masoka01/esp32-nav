@@ -69,6 +69,19 @@ int main() {
   display.reset();
 
   // ────────────────────────────────────────────────────────────────────
+  // Jalur pin I2C default harus tetap utuh: firmware TIDAK memanggil
+  // Wire.begin() sendiri, dan library yang memakai default board. Kalau
+  // default ini berubah, board standar (WROOM 21/22, C3 8/9) ikut rusak
+  // tanpa ada yang menyadarinya.
+  section("I2C default");
+  {
+    check(Wire.beginCalled == false,
+          "pin default: firmware tidak mengambil alih Wire.begin()");
+    check(display.periphBeginSeen == 1,
+          "pin default: periphBegin=true agar library pakai default board");
+  }
+
+  // ────────────────────────────────────────────────────────────────────
   section("formatDist");
   {
     check(formatDist(-1).length() == 0,          "negatif → string kosong");

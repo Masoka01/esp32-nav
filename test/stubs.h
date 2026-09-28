@@ -187,13 +187,30 @@ class GfxStub {
 
 class Adafruit_GFX : public GfxStub {};
 
-class TwoWire {};
+// Mirrors TwoWire::begin() so the firmware's optional Wire.begin(SDA, SCL)
+// call compiles, and records whether the firmware took ownership of the bus.
+class TwoWire {
+ public:
+  bool beginCalled = false;
+  int sda = -1;
+  int scl = -1;
+  void begin() { beginCalled = true; }
+  void begin(int a, int b) { beginCalled = true; sda = a; scl = b; }
+};
 extern TwoWire Wire;
 
 class Adafruit_SSD1306 : public GfxStub {
  public:
+  // Mirrors the real signature: begin(vcs, addr, reset = true, periphBegin = true).
+  // periphBeginSeen lets tests assert the firmware never lets the library
+  // re-run Wire.begin() over user-supplied pins.
+  int periphBeginSeen = -1;
   Adafruit_SSD1306(int w, int h, TwoWire*, int r) : GfxStub() { W = w; H = h; (void)r; }
-  bool begin(int vcc, int addr) { (void)vcc; (void)addr; return true; }
+  bool begin(int vcc, int addr, bool reset = true, bool periphBegin = true) {
+    (void)vcc; (void)addr; (void)reset;
+    periphBeginSeen = periphBegin ? 1 : 0;
+    return true;
+  }
 };
 
 // ==========================================================================

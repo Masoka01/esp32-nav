@@ -119,18 +119,74 @@ mengandalkannya untuk dipakai luas atau jadi sistem produksi.
 Buka `esp32_nav/esp32_nav.ino` di Arduino IDE, pilih board yang sesuai, lalu
 upload.
 
-**Wiring OLED ke ESP32 asli (WROOM):**
+#### Pin I2C OLED
+
+Firmware **tidak menghafal nomor GPIO**. Pin SDA/SCL diambil dari default board
+yang kamu pilih di Arduino IDE, jadi tabel di bawah berlaku untuk board
+tersebut. Kalau sudah sesuai, tidak perlu ubah apa pun di sketch.
+
+| Pilihan board di Arduino IDE | SDA | SCL |
+|------------------------------|-----|-----|
+| `ESP32 Dev Module` (WROOM) | GPIO 21 | GPIO 22 |
+| `ESP32C3 Dev Module` | GPIO 8 | GPIO 9 |
+
+Wiring:
+
 | OLED | ESP32 |
 |------|-------|
 | VCC  | 3.3V  |
 | GND  | GND   |
-| SDA  | GPIO 21 |
-| SCL  | GPIO 22 |
+| SDA  | SDA   |
+| SCL  | SCL   |
 
-**Kalau pakai ESP32-C3:** jangan memakai pin di atas. C3 tidak punya GPIO 21/22,
-dan pin I2C default-nya **berbeda tiap board**. Cek silkscreen atau pinout
-board-mu — sebagian C3 memakai SDA/SCL di GPIO 8/9, sebagian di 6/7. Kalau
-pinnya tidak cocok, ganti angka GPIO di bagian `setup()`.
+> **Jangan pakai GPIO 21/22 di C3.** Di ESP32-C3 pin 20 dan 21 adalah UART
+> TX/RX, bukan I2C. Menyalin wiring WROOM ke C3 tidak akan bisa jalan sama
+> sekali, bukan sekadar "kurang ideal".
+
+> **VCC selalu 3.3V.** Jangan beri 5V ke OLED dari C3. Board yang punya
+> level-shifter 5V di modulnya sendiri sudah aman; board polos belum.
+
+#### Kalau pin board-mu berbeda
+
+Beberapa board pihak ketiga tidak memakai pin di atas. Kalau silkscreen atau
+pinout board-mu menunjukkan nomor lain, isi dua makro di
+`esp32_nav/esp32_nav.ino`:
+
+```cpp
+#define OLED_SDA_PIN  4   // GPIO SDA sesuai pinout board-mu
+#define OLED_SCL_PIN  5   // GPIO SCL sesuai pinout board-mu
+```
+
+Default-nya `-1`, yang berarti "pakai default board". Kalau masih ragu, pakai
+nomor yang tercetak di silkscreen board sebagai patokan.
+
+> **Kenapa perlu dua langkah ini?** `setup()` memanggil `Wire.begin(SDA, SCL)`
+> sendiri lalu meneruskan `periphBegin = false` ke `display.begin()`. Kalau
+> `periphBegin` dibiarkan `true`, library Adafruit SSD1306 akan memanggil
+> `Wire.begin()` tanpa argumen dan **menimpa pin kustommu kembali ke default
+> board** — gejalanya OLED diam saja tanpa error, padahal kawat sudah benar.
+
+#### Address I2C
+
+Default `0x3C`. Sebagian modul SSD1306 memakai `0x3D`. Ganti di
+`esp32_nav/esp32_nav.ino`:
+
+```cpp
+#define OLED_ADDRESS  0x3D
+```
+
+Kalau modulmu tidak terdeteksi di `0x3C`, coba `0x3D` sebelum mulai curiga
+soal wiring.
+
+#### Troubleshooting
+
+| Gejala | Kemungkinan & cara cek |
+|--------|------------------------|
+| Serial Monitor prints `[ERROR] OLED tidak ditemukan!` | Alamat I2C salah (coba `0x3D`), atau SDA/SCL tertukar, atau solder belum nyambung. Buka Serial Monitor 115200 baud. |
+| OLED menyala tapi layar kosong | Kabel SDA/SCL kebalik, atau pin yang dipakai tidak sesuai default board → isi `OLED_SDA_PIN`/`OLED_SCL_PIN`. |
+| Baris `[I2C] SDA=.. SCL=..` muncul di Serial | `Wire.begin()` berjalan normal. Kalau layar tetap kosong, masalahnya di address atau kabel, bukan di pin. |
+| Layar penuh garis acak | Kabel terlalu panjang atau pull-up-nya kurang. Selang di bawah 20 cm, dan pakai modul OLED yang sudah punya pull-up onboard. |
+| `[ERROR] OLED tidak ditemukan!` di board WROOM | Pastikan GND OLED dan GND ESP32 benar-benar tersambung. |
 
 > **Belum pernah diuji di hardware.** Port ke NimBLE diverifikasi lewat test
 > suite (stub-nya mencerminkan API 2.x), tapi belum pernah di-flash ke board

@@ -8,8 +8,15 @@
   Wiring OLED ke ESP32:
     OLED VCC  →  3.3V
     OLED GND  →  GND
-    OLED SDA  →  GPIO 21
-    OLED SCL  →  GPIO 22
+    OLED SDA  →  SDA board
+    OLED SCL  →  SCL board
+
+  Pin SDA/SCL mengikuti default board yang dipilih di Arduino IDE:
+    - ESP32 Dev Module (WROOM) → GPIO 21 / GPIO 22
+    - ESP32C3 Dev Module        → GPIO 8 / GPIO 9
+
+  Kalau board-mu tidak memakai default itu, isi OLED_SDA_PIN dan
+  OLED_SCL_PIN di bawah dengan nomor GPIO-nya. Lihat README.md.
 */
 
 // Stack BLE: NimBLE, bukan Bluedroid bawaan ESP-IDF.
@@ -36,6 +43,17 @@
 #define SCREEN_HEIGHT 64
 #define OLED_RESET    -1  // Reset pin (tidak dipakai)
 #define OLED_ADDRESS  0x3C  // Ganti 0x3D jika tidak terdeteksi
+
+// Pin I2C OLED. Biarkan -1 untuk memakai default board yang dipilih di
+// Arduino IDE (WROOM 21/22, C3 8/9). Isi nomor GPIO HANYA kalau board-mu
+// tidak memakai default itu -- lihat README.md.
+//
+// Penting: kalau pin di sini diisi, setup() memanggil Wire.begin() sendiri
+// lalu meneruskan periphBegin=false ke display.begin(). Kalau periphBegin
+// dibiarkan true, Adafruit SSD1306 akan memanggil Wire.begin() tanpa
+// argumen dan menimpa pin kustom ini kembali ke default board.
+#define OLED_SDA_PIN  -1
+#define OLED_SCL_PIN  -1
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
@@ -575,7 +593,20 @@ void setup() {
   Serial.begin(115200);
 
   // Init OLED
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
+  //
+  // Pin custom?: kita yang pegang Wire.begin() sendiri, jadi periphBegin
+  // harus false -- kalau true, Adafruit SSD1306 memanggil Wire.begin()
+  // tanpa argumen dan menimpa pin kustom kita balik ke default board.
+  if (OLED_SDA_PIN >= 0 && OLED_SCL_PIN >= 0) {
+    Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
+    Serial.print("[I2C] SDA=");
+    Serial.print(OLED_SDA_PIN);
+    Serial.print(" SCL=");
+    Serial.println(OLED_SCL_PIN);
+  }
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS, true,
+                     OLED_SDA_PIN < 0 || OLED_SCL_PIN < 0)) {
     Serial.println("[ERROR] OLED tidak ditemukan! Cek wiring.");
     for (;;);  // halt
   }
