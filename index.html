@@ -190,6 +190,16 @@
     #bookmarklet-panel ol { margin: 0 0 10px; padding-left: 18px; }
     #bookmarklet-panel li { margin-bottom: 4px; }
     #bookmarklet-panel .bm-hint { color: var(--text-muted); }
+    #bookmarklet-panel .bm-note {
+      color: var(--text-muted); font-size: 11px; line-height: 1.6;
+      margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+    }
+    #bookmarklet-panel .bm-note:empty { display: none; }
+    /* Jalur pengganti untuk platform yang tidak bisa menjalankan bookmarklet. */
+    #bm-alt { font-size: 12px; line-height: 1.6; }
+    #bm-alt p { margin: 0 0 8px; }
+    #bm-alt p:last-child { margin-bottom: 0; }
+    #bm-alt b { color: var(--text); }
     #bookmarklet-code {
       width: 100%;
       box-sizing: border-box;
@@ -400,17 +410,21 @@
     </div>
     <div id="bookmarklet-panel">
       <div class="bm-title">Kirim tujuan dari Google Maps</div>
-      <ol>
-        <li>Salin kode di bawah ini.</li>
-        <li>Simpan sebagai bookmark bernama <b>Kirim ke ESP-Nav</b>
-            <span class="bm-hint">(Chrome: ⋮ → Bookmark → Edit → More ⋮ → Edit)</span></li>
-        <li>Buka lokasi di Google Maps, lalu tap bookmark itu.</li>
-      </ol>
-      <textarea id="bookmarklet-code" readonly rows="3" spellcheck="false"></textarea>
-      <div class="bm-actions">
-        <button id="btn-copy-bm" class="primary">Salin kode</button>
-        <button id="btn-close-bm">Tutup</button>
+      <div id="bm-bm-flow">
+        <ol>
+          <li>Salin kode di bawah ini.</li>
+          <li>Simpan sebagai bookmark bernama <b>Kirim ke ESP-Nav</b>
+              <span class="bm-hint" id="bm-save-hint"></span></li>
+          <li>Buka lokasi di Google Maps, lalu <span id="bm-run-how"></span>.</li>
+        </ol>
+        <textarea id="bookmarklet-code" readonly rows="3" spellcheck="false"></textarea>
+        <div class="bm-actions">
+          <button id="btn-copy-bm" class="primary">Salin kode</button>
+          <button id="btn-close-bm">Tutup</button>
+        </div>
       </div>
+      <div id="bm-alt" style="display:none"></div>
+      <div class="bm-note" id="bm-note"></div>
     </div>
   </div>
 
@@ -458,6 +472,8 @@ const state = {
   steps: [],
   currentStep: 0,
   navigating: false,
+  // Perjalanan tersimpan yang menunggu posisi GPS pertama. Lihat restoreTrip.
+  pendingRestore: null,
   bleDevice: null,
   bleChar: null,
   wakeLock: null,
@@ -500,6 +516,16 @@ function setUserPos(lat, lng) {
   state.userLat = lat; state.userLng = lng;
   if (state.userMarker) state.userMarker.setLatLng([lat, lng]);
   else state.userMarker = L.marker([lat, lng], { icon: userIcon }).addTo(map);
+
+  // Perjalanan tersimpan yang menunggu posisi pertama. WAJIB diselesaikan
+  // sebelum checkStepProgress: state.steps masih kosong sampai rute dihitung
+  // ulang, jadi checkStepProgress akan keluar diam-diam dan langkah yang
+  // tersimpan tidak pernah pulih.
+  if (state.pendingRestore) {
+    completeRestore(state.pendingRestore).catch(() => { /* fetchRoute sudah toast sendiri */ });
+    return;
+  }
+
   if (state.navigating) checkStepProgress(lat, lng);
 }
 
@@ -804,9 +830,73 @@ function cleanIncomingLink() {
 const bmPanel = document.getElementById('bookmarklet-panel');
 const bmCode  = document.getElementById('bookmarklet-code');
 
+function detectPlatform() {
+  const ua = navigator.userAgent || '';
+  // iPadOS 13+ tidak pernah mengirim "iPad" di user agent — ia melaporkan
+  // "MacIntel" dengan maxTouchPoints > 1. Kalau hanya cek /iPad/, iPad akan
+  // salah dikira desktop dan dapat instruksi yang tidak bisa dijalankan.
+  if (/iPhone|iPad|iPod/.test(ua)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) return 'ios';
+  if (/Android/.test(ua)) return 'android';
+  return 'desktop';
+}
+
+// Instruksi bookmarklet TIDAK sama di semua platform, dan salahnya tidak
+// sekadar membingungkan: di Android, mengetuk bookmark dari daftar bookmark
+// tidak menjalankan apa pun karena Chrome membuang URL "javascript:" di sana
+// (bug Chromium 480010). User akan mengira aplikasinya rusak.
+// Satu-satunya jalur yang jalan di Android: address bar.
+const BM_HELP = {
+  desktop: {
+    save: '(Chrome: ⋮ → Bookmark → Edit → More ⋮ → Edit)',
+    run: 'klik bookmark <b>Kirim ke ESP-Nav</b>',
+    note: '',
+  },
+  android: {
+    save: '(Chrome: ⋮ → ⭐ → <b>Edit</b>, lalu ganti kolom URL dengan kode di bawah)',
+    run: 'ketik <b>Kirim ke ESP-Nav</b> di address bar Google Maps, lalu tap sarannya',
+    note: 'Bookmark Android tidak bisa dibuka dari daftar bookmark: Chrome membuang URL "javascript:" di sana. Address bar satu-satunya tempat yang menjalankannya.',
+  },
+};
+
+function renderBookmarkletHelp() {
+  const platform = detectPlatform();
+  const flow = document.getElementById('bm-bm-flow');
+  const alt  = document.getElementById('bm-alt');
+  const note = document.getElementById('bm-note');
+
+  if (platform === 'ios') {
+    // Mobile Safari memblokir JavaScript di address bar DAN di bookmark, jadi
+    // menampilkan kode yang dijamin tidak bisa jalan hanya membuang waktu
+    // user. Jalur tempel manual sudah ada dan tidak butuh kode baru.
+    flow.style.display = 'none';
+    alt.style.display = 'block';
+    alt.innerHTML =
+      '<p><b>Safari di iOS tidak bisa menjalankan bookmarklet.</b> Apple menghentikan '
+      + 'eksekusi JavaScript di address bar maupun di bookmarknya.</p>'
+      + '<p>Cara biasa sudah cukup: buka lokasi di <b>Chrome</b> (bukan aplikasi '
+      + 'Google Maps), tekan address bar, salin URL panjangnya, lalu tempel ke kotak '
+      + 'pencarian di atas.</p>'
+      + '<p>URL dari address bar Chrome selalu bentuk panjang, jadi bisa dibaca '
+      + 'langsung tanpa perlu expand tautan pendek.</p>';
+    note.textContent = '';
+    return;
+  }
+
+  const help = BM_HELP[platform];
+  flow.style.display = 'block';
+  alt.style.display = 'none';
+  document.getElementById('bm-save-hint').textContent = help.save;
+  document.getElementById('bm-run-how').innerHTML = help.run;
+  note.textContent = help.note;
+}
+
 function toggleBookmarkletPanel(force) {
   const open = force !== undefined ? force : bmPanel.style.display !== 'block';
-  if (open) bmCode.value = buildBookmarklet(location.origin);
+  if (open) {
+    bmCode.value = buildBookmarklet(location.origin);
+    renderBookmarkletHelp();
+  }
   bmPanel.style.display = open ? 'block' : 'none';
   document.getElementById('btn-bookmarklet').classList.toggle('active', open);
 }
@@ -840,6 +930,13 @@ function saveTrip() {
     sessionStorage.setItem(TRIP_KEY, JSON.stringify({
       lat: state.destLat, lng: state.destLng,
       name: state.destName, step: state.currentStep,
+      // navigating WAJIB ikut disimpan. Tanpa ini, refresh mengembalikan tujuan
+      // dan rute, tapi UI navigasi tetap dalam keadaan idle — persis gejala
+      // "kena refresh langsung balik ke tampilan awal".
+      // `!!` dipakai karena payload lama (sebelum key ini ada) tidak punya
+      // properti, dan undefined harus dibaca sebagai false, bukan tersesat
+      // menjadi true lewat operator `||`.
+      navigating: !!state.navigating,
     }));
   } catch { /* storage penuh / private mode: bukan alasan gagalkan navigasi */ }
 }
@@ -858,9 +955,20 @@ function clearStoredTrip() {
   try { sessionStorage.removeItem(TRIP_KEY); } catch { /* abaikan */ }
 }
 
-// Refresh di tengah perjalanan tidak boleh menghapus tujuan. GPS/BLE/wake
-// lock sengaja TIDAK dipulihkan: semuanya butuh user gesture, dan
-// memulihkannya diam-diam akan menghasilkan state navigasi yang rusak.
+// Refresh di tengah perjalanan tidak boleh menghapus tujuan.
+//
+// BUG: versi lama fungsi ini mengecek `if (!state.userLat) return;` di sini.
+// Tapi restoreTrip() dipanggil secara SINKRON di akhir script, sedangkan
+// locateMe() yang mengisi userLat memakai getCurrentPosition yang ASYNC.
+// Jadi pada baris ini posisi belum pernah tiba, userLat selalu null, dan
+// return dini itu terjadi di SETIAP page load — bukan kasus jarang. Rute pun
+// tidak pernah dihitung ulang, dan tidak ada yang mencoba lagi.
+//
+// Perbaikan: jangan menolak, simpan perjalanan yang tertunda, lalu selesaikan
+// begitu posisi pertama masuk (lihat setUserPos). Karena setUserPos dipanggil
+// dari locateMe() maupun watchPosition, urutan callback tidak berpengaruh.
+//
+// Wake lock dan BLE tetap TIDAK dipulihkan: keduanya butuh user gesture.
 async function restoreTrip() {
   const t = loadTrip();
   if (!t) return;
@@ -873,10 +981,24 @@ async function restoreTrip() {
   if (state.destMarker) state.destMarker.setLatLng([t.lat, t.lng]);
   else state.destMarker = L.marker([t.lat, t.lng], { icon: destIcon }).addTo(map);
 
+  // Payload lama (sebelum key `navigating` disimpan) tidak punya properti ini.
+  // `!!` menjaga undefined terbaca sebagai false, bukan menyalakan mode
+  // navigasi pada perjalanan yang sebenarnya tidak sedang berjalan.
+  state.navigating = !!t.navigating;
+
   if (!state.userLat) {
-    toast('Tujuan dipulihkan. Aktifkan GPS untuk menghitung rute.');
+    state.pendingRestore = t;
+    toast('Tujuan dipulihkan. Menunggu GPS untuk menghitung rute...');
     return;
   }
+
+  await completeRestore(t);
+}
+
+// Bagian yang butuh posisi GPS: menghitung ulang rute, memulihkan langkah,
+// lalu melanjutkan pantauan posisi kalau sedang bernavigasi.
+async function completeRestore(t) {
+  state.pendingRestore = null;
   setInstruction('⏳', 'Menghitung rute...');
   await fetchRoute();
 
@@ -887,6 +1009,11 @@ async function restoreTrip() {
     showNavControls();
     updateInstructionUI();
   }
+
+  // Lanjutkan GPS watch kalau sebelumnya sedang bernavigasi, supaya
+  // checkStepProgress benar-benar jalan lagi. watchPosition tidak butuh user
+  // gesture, jadi aman dipulihkan otomatis — berbeda dengan wake lock dan BLE.
+  if (state.navigating) startWatch();
 }
 
 // ══════════════════════════════════════════════
@@ -896,6 +1023,10 @@ async function selectDestination(lat, lng, name) {
   state.destLat = lat; state.destLng = lng;
   state.destName = name || 'Tujuan';
   state.currentStep = 0;
+  // Tujuan baru yang dipilih user membatalkan perjalanan lama yang masih
+  // tertunda: kalau dibiarkan, restore yang telat datang akan menimpa tujuan
+  // yang baru saja dipilih.
+  state.pendingRestore = null;
   saveTrip();
 
   if (state.destMarker) state.destMarker.setLatLng([lat, lng]);
@@ -1040,10 +1171,21 @@ function showNavControls() {
 document.getElementById('btn-start').addEventListener('click', startNavigation);
 document.getElementById('btn-stop').addEventListener('click', stopNavigation);
 
+// Dipisah dari startNavigation supaya completeRestore() bisa melanjutkan
+// pantauan tanpa memutar ulang requestWakeLock() — wake lock butuh user
+// gesture, jadi tidak boleh diminta dari jalur pemulihan otomatis.
+function startWatch() {
+  if (!navigator.geolocation || state.watchId !== null) return;
+  state.watchId = navigator.geolocation.watchPosition(pos => {
+    setUserPos(pos.coords.latitude, pos.coords.longitude);
+  }, null, { enableHighAccuracy: true, maximumAge: 2000 });
+}
+
 function startNavigation() {
   if (!state.steps.length) { toast('Cari tujuan dulu'); return; }
   state.navigating = true;
   state.currentStep = 0;
+  state.pendingRestore = null;
   saveTrip();
   updateInstructionUI();
   const first = currentInstructionPayload();
@@ -1054,18 +1196,17 @@ function startNavigation() {
   // task gesture dari klik tombol.
   requestWakeLock();
 
-  // Watch GPS
-  if (navigator.geolocation) {
-    state.watchId = navigator.geolocation.watchPosition(pos => {
-      setUserPos(pos.coords.latitude, pos.coords.longitude);
-    }, null, { enableHighAccuracy: true, maximumAge: 2000 });
-  }
+  startWatch();
 
   toast('Navigasi dimulai');
 }
 
 function stopNavigation() {
   state.navigating = false;
+  // Perjalanan yang masih tertunda harus ikut dibuang. Kalau tidak, satu
+  // posisi GPS yang telat datang bisa menghidupkan kembali rute yang baru
+  // saja dihentikan oleh user.
+  state.pendingRestore = null;
   if (state.watchId !== null) {
     navigator.geolocation.clearWatch(state.watchId);
     state.watchId = null;
