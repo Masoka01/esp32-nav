@@ -50,6 +50,24 @@ const SHELL_ASSETS = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/maskable-512.png',
+  // Logika aplikasi sekarang tersebar di modul ES terpisah, bukan inline di
+  // index.html. Semua harus ikut dicache: kalau salah satu hilang, addAll
+  // tetap berhasil (file-nya ada di server) tapi offline modul itu tidak
+  // bisa diambil dan seluruh aplikasi gagal start — bukan cuma satu fitur.
+  './src/ble.js',
+  './src/dom.js',
+  './src/geocode.js',
+  './src/main.js',
+  './src/map.js',
+  './src/nav.js',
+  './src/parse.js',
+  './src/route.js',
+  './src/share.js',
+  './src/state.js',
+  './src/store.js',
+  './src/toast.js',
+  './src/ui.js',
+  './src/wake.js',
 ];
 
 self.addEventListener('install', (event) => {

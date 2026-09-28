@@ -1,17 +1,25 @@
-// Test sisi web: sanitasi, pemetaan ikon, dan formation payload BLE.
+// Test sisi web: sanitasi, pemetaan ikon, dan format payload BLE.
 //
-// Fungsi diambil langsung dari index.html (bukan disalin), jadi test ini
-// menguji kode yang benar-benar terkirim ke ESP32.
+// Modul src/ di-import sungguhan, bukan dikiris dari index.html. Stub DOM-nya
+// dipasang lewat installStubs() dulu, baru import-nya memakai import() DINAMIS
+// — import statis akan di-hoist dan berjalan sebelum stub siap.
+//
+// Bedanya dengan versi lama: dulu konstanta BLE_CHUNK_SIZE/TEXT_MAX/ICON_MAX
+// diambil dengan regex dari index.html. Sekarang dibaca langsung dari
+// src/ble.js, jadi test ikut gagal kalau konstantanya berubah.
 //
 // Pasangannya: test_cross.cpp membuktikan byte yang sama diterima firmware.
 //
 // Run:  node test/test_web.mjs
-import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
+import { installStubs, load, resetAll, calls, el } from './helpers/env.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const html = fs.readFileSync(path.join(here, '..', 'index.html'), 'utf8');
+installStubs();
+
+const { state } = await load('src/state.js');
+const ble_   = await load('src/ble.js');
+const parse_ = await load('src/parse.js');
+const share_ = await load('src/share.js');
+const route_ = await load('src/route.js');
 
 let pass = 0, fail = 0;
 const section = n => console.log('== ' + n + ' ==');
@@ -21,43 +29,46 @@ function check(cond, what) {
   console.log('  FAIL: ' + what);
 }
 
-// ── ekstraksi dari index.html ────────────────────────────────────────────
-function block(startMarker, endMarker) {
-  const a = html.indexOf(startMarker);
-  if (a < 0) throw new Error('tidak menemukan: ' + startMarker);
-  const b = html.indexOf(endMarker, a);
-  if (b < 0) throw new Error('tidak menemukan akhir untuk: ' + startMarker);
-  return html.slice(a, b + endMarker.length);
-}
+// Konstanta dibaca dari modul aslinya, bukan dari teks HTML.
+const consts = {
+  BLE_CHUNK_SIZE: ble_.BLE_CHUNK_SIZE,
+  TEXT_MAX: ble_.TEXT_MAX,
+  ICON_MAX: ble_.ICON_MAX,
+};
 
-const consts = {};
-for (const name of ['BLE_CHUNK_SIZE', 'TEXT_MAX', 'ICON_MAX']) {
-  const m = html.match(new RegExp('const ' + name + '\\s*=\\s*([^;]+);'));
-  if (!m) throw new Error('konstanta tidak ditemukan: ' + name);
-  consts[name] = Number(m[1].trim());
-}
+// Dipakai badan test di bawah dengan nama yang sama seperti sebelumnya.
+const api = {
+  sanitizeForBLE: ble_.sanitizeForBLE,
+  clampCode: ble_.clampCode,
+  normalizeDist: ble_.normalizeDist,
+  maneuverCode: route_.maneuverCode,
+  maneuverIcon: route_.maneuverIcon,
+  writeChunks: ble_.writeChunks,
+  sendToBLE: ble_.sendToBLE,
+  parseMapsLink: parse_.parseMapsLink,
+  validLatLng: parse_.validLatLng,
+  buildBookmarklet: share_.buildBookmarklet,
+  readIncomingLink: share_.readIncomingLink,
+};
 
-const src = [
-  block('function sanitizeForBLE', '    .slice(0, TEXT_MAX);\n}'),
-  block('function clampCode', '}'),
-  block('function normalizeDist', '}'),
-  block('function maneuverCode', '  return 12;\n}'),
-  block('async function writeChunks', '      await ch.writeValue(chunk);\n    }\n  }\n}'),
-  block('function sendToBLE', '  return bleSendChain;\n}'),
-  block('const MAPS_NUM', '  return { ok: true, lat, lng, name, exact };\n}'),
-  block('function buildBookmarklet', "       + '+encodeURIComponent(location.href))})()';\n}"),
-  block('function readIncomingLink', "  try { return new URLSearchParams(hash).get('u'); } catch { return null; }\n}"),
-].join('\n\n');
-
-// Guard: kalau endMarker tidak cocok, blok bisa terpotong dan test diam-diam
-// menguji kode yang tidak ada. Pastikan blok yang terekstrak benar-benar utuh.
-check(src.includes('function parseMapsLink'), 'blok parseMapsLink ikut terekstrak utuh');
-check(src.includes('function validLatLng'), 'helper validLatLng ikut terekstrak utuh');
-check(src.includes('maps\\.app\\.goo\\.gl'), 'blok parser memuat deteksi short link');
-check(src.includes('needs-geocode'), 'blok parser memuat jalur needs-geocode');
-
-
-const state = { bleChar: null, bleSendChain: Promise.resolve() };
+// ── guard: modul benar-benar bisa dipakai, bukan sekadar ada ─────────────
+//
+// Versi lama menjaga "blok ini ikut terekstrak utuh" dengan membaca teks
+// hasil ekstraksi. Sekarang tidak ada teks yang bisa dibaca, jadi yang dijaga
+// adalah perilaku yang sungguhan diuji: parser harus bisa membedakan
+// short link, link yang butuh geocoding, dan link berisi koordinat.
+check(api.parseMapsLink('https://maps.app.goo.gl/abc123').reason === 'short-link',
+      'parser mengenali short link maps.app.goo.gl');
+check(api.parseMapsLink('https://goo.gl/maps/abc123').reason === 'short-link',
+      'parser mengenali short link goo.gl');
+check(api.parseMapsLink('https://www.google.com/maps/place/Monas').reason === 'needs-geocode',
+      'parser mengenali jalur needs-geocode');
+check(api.parseMapsLink('https://www.google.com/maps?q=-6.2,106.8').ok === true,
+      'parser mengurai link berkoordinat');
+check(api.validLatLng(-6.2, 106.8) && !api.validLatLng(999, 0),
+      'validLatLng membedakan rentang sah dan tidak sah');
+check(consts.TEXT_MAX === 40 && consts.ICON_MAX === 12 && consts.BLE_CHUNK_SIZE === 20,
+      'konstanta BLE sesuai nilai yang di-hardcode firmware');
 
 // Stub characteristic: mencatat setiap write beserta urutan dan async-ness.
 function makeChar() {
@@ -74,16 +85,6 @@ function makeChar() {
   };
   return ch;
 }
-
-const fakeLocation = { hash: '' };
-const factory = new Function(
-  'state', 'TextEncoder', 'console', 'setImmediate', 'location',
-  'const TEXT_MAX = ' + consts.TEXT_MAX + '; const ICON_MAX = ' + consts.ICON_MAX +
-  '; const BLE_CHUNK_SIZE = ' + consts.BLE_CHUNK_SIZE + ';\n' +
-  'let bleSendChain = Promise.resolve();\n' +
-  src + '\nreturn { sanitizeForBLE, clampCode, normalizeDist, maneuverCode, writeChunks, sendToBLE, parseMapsLink, validLatLng, buildBookmarklet, readIncomingLink };'
-);
-const api = factory(state, TextEncoder, console, setImmediate, fakeLocation);
 // ── sanitizeForBLE ──────────────────────────────────────────────────────
 section('sanitizeForBLE');
 {
@@ -425,22 +426,22 @@ section('readIncomingLink');
     + '/data=!3m2!1e3!4b1!4m6!3m5!1s0x2e78110013ed2f4b:0x8cd94e5ea237aea0'
     + '!8m2!3d-7.4450072!4d112.3587988!16s%2Fg%2F11ntpfhd38';
 
-  fakeLocation.hash = '#u=' + encodeURIComponent(G);
+  location.hash = '#u=' + encodeURIComponent(G);
   check(r() === G, 'fragment #u= dibaca dan di-decode');
 
-  fakeLocation.hash = '';
+  location.hash = '';
   check(r() === null, 'tanpa fragment -> null');
 
-  fakeLocation.hash = '#lain=1';
+  location.hash = '#lain=1';
   check(r() === null, 'fragment tanpa u -> null');
 
   // Yang kembali harus langsung bisa dipakai parser.
-  fakeLocation.hash = '#u=' + encodeURIComponent(G);
+  location.hash = '#u=' + encodeURIComponent(G);
   const res = api.parseMapsLink(r());
   check(res.ok === true, 'hasil bookmarklet langsung bisa diparse');
   check(res.name === 'WH-2 ARCHER', 'nama tempat terbaca dari tautan bookmarklet');
   check(res.exact === true, 'pin terbaca sebagai koordinat persis');
-  fakeLocation.hash = '';
+  location.hash = '';
 }
 
 console.log('\n─────────────────────────────');

@@ -315,8 +315,12 @@ check(/<link[^>]+rel=["']manifest["'][^>]*>/i.test(html),
   'index.html: ada tag link rel=manifest');
 check(/<meta[^>]+name=["']theme-color["'][^>]*>/i.test(html),
   'index.html: ada meta theme-color');
-check(/navigator\.serviceWorker\.register/.test(html),
-  'index.html: mendaftarkan service worker');
+// Registrasi service worker pindah ke src/main.js saat inline script dipecah
+// jadi modul. Yang diuji tetap sama persis (aplikasi mendaftarkan SW-nya),
+// hanya sekarang yang dicari lewat entry module, bukan seluruh isi index.html.
+const swEntry = (html.match(/<script[^>]*type="module"[^>]*src="([^"]+)"/) || [])[1];
+check(!!swEntry && /navigator\.serviceWorker\.register/.test(read(swEntry.replace(/^\.\//, ''))),
+  'entry module mendaftarkan service worker (dulu di index.html)');
 check(/href=["']\.\/manifest\.json["']/.test(html),
   'index.html: manifest pakai path relatif');
 
@@ -344,6 +348,59 @@ check(!!mf.share_target,
   'manifest.json: share_target terdaftar (ini yang bikin app muncul di share sheet)');
 check(mf.share_target && mf.share_target.method === 'POST',
   'manifest.json: share_target memakai POST, bukan GET');
+
+// ══════════════════════════════════════════════
+//  Offline: modul ES harus ikut ter-cache
+// ══════════════════════════════════════════════
+//
+// Memecah inline script jadi modul ES menciptakan mode gagal baru: modul
+// yang tidak ada di SHELL_ASSETS tetap ter-cache saat online, karena aturan 3
+// (cache-first) menyimpan apa pun yang diminta. Jadi bug-nya baru muncul saat
+// perangkat benar-benar offline — lalu seluruh aplikasi gagal start karena
+// satu modul tidak ditemukan di cache.
+//
+// Daftar di bawah sengaja TIDAK di-hardcode. Ia ditelusuri dari entry module
+// di index.html lalu mengikuti seluruh import transitif. Kalau nanti ada modul
+// baru yang lupa didaftarkan, test inilah yang menangkapnya.
+{
+  const shellBlock = (swSrc.match(/SHELL_ASSETS\s*=\s*\[([\s\S]*?)\]/) || [])[1] || '';
+  const inShell = new Set(
+    (shellBlock.match(/['"]([^'"]+)['"]/g) || []).map(q => q.slice(1, -1))
+  );
+
+  // Specifier import bersifat relatif terhadap BERKAS pengimpor, bukan root:
+  // './ble.js' di dalam src/main.js berarti src/ble.js.
+  const dirname = f => f.split('/').slice(0, -1).join('/');
+  const resolve = (from, spec) => {
+    const parts = (dirname(from) + '/' + spec).split('/');
+    const out = [];
+    for (const part of parts) {
+      if (part === '' || part === '.') continue;
+      if (part === '..') out.pop();
+      else out.push(part);
+    }
+    return out.join('/');
+  };
+
+  const seen = new Set();
+  const queue = swEntry ? [swEntry.replace(/^\.\//, '')] : [];
+  while (queue.length) {
+    const rel = queue.shift();
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    for (const m of read(rel).matchAll(/from\s+['"]([^'"]+)['"]/g)) {
+      if (m[1].startsWith('.')) queue.push(resolve(rel, m[1]));
+    }
+  }
+
+  check(seen.size >= 14, `graf modul tertelusuri: ${seen.size} berkas`);
+  for (const rel of [...seen].sort()) {
+    check(inShell.has('./' + rel),
+      `sw.js: ${rel} ada di SHELL_ASSETS (kalau tidak, app gagal start saat offline)`);
+  }
+  check(inShell.has('./index.html') && inShell.has('./manifest.json'),
+    'sw.js: index.html dan manifest.json tetap ada di SHELL_ASSETS');
+}
 
 // ══════════════════════════════════════════════
 //  Hasil

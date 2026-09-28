@@ -1,18 +1,19 @@
-// Uji logika wake lock dari index.html.
+// Uji logika wake lock dari src/wake.js.
 //
-// Meng-ekstrak kode NYATA dari index.html, bukan menyalinnya, supaya test
-// ikut gagal kalau implementasinya berubah.
+// Modul di-import sungguhan, bukan diekstrak dari index.html dengan marker.
+// Stub dipasang lewat installStubs() dulu, lalu import memakai import()
+// DINAMIS — import statis akan di-hoist dan berjalan sebelum stub siap.
 //
 // Yang diuji: apakah layar benar-benar dijaga selama navigasi, apakah
 // lock tidak pernah dobel, apakah sentinel dari sistem dilaporkan ke user,
 // dan apakah kegagalan request terlihat (bukan diam-diam).
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { installStubs, load, resetAll, calls, el, freshState, bindState } from './helpers/env.mjs';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(HERE, '..');   // path relatif, bukan absolut:
-                                         // test harus jalan setelah repo dipindah.
+installStubs();
+
+const { state } = await load('src/state.js');
+bindState(state);
+const wake_ = await load('src/wake.js');
 
 let pass = 0, fail = 0;
 const check = (cond, what) => {
@@ -21,21 +22,8 @@ const check = (cond, what) => {
 };
 const section = s => console.log(`\n== ${s} ==`);
 
-const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-function extract(startMarker, endMarker) {
-  const a = html.indexOf(startMarker);
-  if (a < 0) throw new Error(`tidak menemukan: ${startMarker}`);
-  const b = html.indexOf(endMarker, a);
-  if (b < 0) throw new Error(`tidak menemukan end: ${endMarker}`);
-  return html.slice(a, b + endMarker.length);
-}
-
-// Ambil blok dari awal (termasuk pembentuk WAV) sampai akhir
-// handleVisibilityChange. Listener document/window sengaja TIDAK ikut
-// diambil supaya test bisa memasang dan memverifikasinya sendiri.
-const wakeSrc = extract('function silentWavDataUri', '\n  requestWakeLock();\n}');
-
-// ── mock ──
+// Sentinel tiruan:/release() mengembalikan Promise dan listener 'release'
+// bisa dipicu manual untuk meniru sistem yang melepas lock sendiri.
 function makeSentinel() {
   const ls = {};
   return {
@@ -50,51 +38,49 @@ function makeSentinel() {
   };
 }
 
+/**
+ * Skenario: state mewat navigasi, navigator dengan atau tanpa Screen Wake
+ * Lock API, dan Audio tiruan yang mencatat setiap elemen yang dibuat.
+ *
+ * Bentuk kembalannya sama dengan versi lama supaya badan test di bawah tidak
+ * perlu diubah — yang berubah hanya dari mana asalnya.
+ */
 function makeEnv({ hasApi = true, requestImpl } = {}) {
-  const cls = new Set(['hidden']);
-  const note = {
-    textContent: '',
-    classList: {
-      add: c => cls.add(c),
-      remove: c => cls.delete(c),
-      contains: c => cls.has(c),
-      toggle(c, force) {
-        if (force === undefined) { cls.has(c) ? cls.delete(c) : cls.add(c); return cls.has(c); }
-        force ? cls.add(c) : cls.delete(c);
-        return !!force;
-      },
-    },
-  };
-  const doc = {
-    visibilityState: 'visible',
-    getElementById: id => (id === 'awake-note' ? note : null),
-  };
-  const nav = {};
+  resetAll();
+  const st = freshState({ navigating: true });
+
+  // keepAwakeAudio adalah state modul, jadi harus dibersihkan agar test
+  // sebelumnya tidak meninggalkan audio yang masih hidup.
+  wake_.stopKeepAwakeFallback();
+
   if (hasApi) {
-    nav.wakeLock = {
-      request: requestImpl || (async () => makeSentinel()),
-    };
+    globalThis.navigator.wakeLock = { request: requestImpl || (async () => makeSentinel()) };
+  } else {
+    // requestWakeLock mengecek `'wakeLock' in navigator`, jadi menghapus
+    // properti-nya — bukan mengesetnya jadi null.
+    delete globalThis.navigator.wakeLock;
   }
+
   const audioLog = [];
   class AudioMock {
     constructor(src) { this.src = src; audioLog.push(this); }
     play() { this.played = true; return Promise.resolve(); }
     pause() { this.played = false; }
   }
-  const state = { navigating: true, wakeLock: null };
+  globalThis.Audio = AudioMock;
 
-  const api = new Function(
-    'state', 'navigator', 'document', 'Audio',
-    `${wakeSrc}\nreturn { requestWakeLock, releaseWakeLock, handleVisibilityChange,`
-      + ` setAwakeNote, getKeepAwakeAudio: () => keepAwakeAudio };`
-  )(state, nav, doc, AudioMock);
-
+  const note = el('awake-note');
   return {
-    state, nav, doc, note, audioLog, api,
+    state: st,
+    nav: globalThis.navigator,
+    doc: globalThis.document,
+    note, audioLog,
+    api: wake_,
     noteVisible: () => !note.classList.contains('hidden'),
     noteWarn: () => note.classList.contains('warn'),
   };
 }
+
 
 // ══════════════════════════════════════════════
 section('Acquire saat navigasi dimulai');
@@ -251,10 +237,14 @@ section('Fallback yang gagal → ada peringatan');
 {
   const env = makeEnv({ hasApi: false });
   // Paksa constructor Audio melempar, seperti browser yang memblokirnya.
-  const mod = new Function('state', 'navigator', 'document', 'Audio',
-    `${wakeSrc}\nreturn { requestWakeLock };`
-  )(env.state, env.nav, env.doc, function () { throw new Error('blocked'); });
-  const { requestWakeLock } = mod;
+    // Paksa constructor Audio melempar, seperti browser yang memblokirnya.
+    //
+    // Versi lama membuat instans modul kedua lewat new Function supaya punya
+    // Audio yang melempar tanpa mengganggu test lain. Sekarang tidak perlu:
+    // wake.js membaca global `Audio` saat startKeepAwakeFallback() dipanggil,
+    // jadi cukup ganti globalnya sesaat di test ini saja.
+    globalThis.Audio = function () { throw new Error('blocked'); };
+    const requestWakeLock = env.api.requestWakeLock;
 
   let threw = false;
   try { await requestWakeLock(); } catch { threw = true; }

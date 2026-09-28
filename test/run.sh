@@ -4,7 +4,7 @@
 #   bash test/run.sh
 #
 # Semua test berjalan di host: logika .ino diuji lewat stub Arduino/BLE,
-# dan logika index.html diekstrak lalu dijalankan di Node.
+# dan logika src/*.js diimpor sungguhan lalu dijalankan di Node.
 set -uo pipefail
 cd "$(dirname "$0")"
 
