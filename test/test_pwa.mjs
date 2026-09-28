@@ -321,6 +321,31 @@ check(/href=["']\.\/manifest\.json["']/.test(html),
   'index.html: manifest pakai path relatif');
 
 // ══════════════════════════════════════════════
+//  5. Cache busting: share target tidak boleh gagal diam-diam
+// ══════════════════════════════════════════════
+//
+// Bug nyata yang sudah pernah terjadi: sw.js ditambah handler share
+// target, tapi VERSION tidak dinaikkan. manifest.json dilayani
+// cache-first, jadi HP tetap memakai manifest LAMA dari cache --
+// termasuk yang belum punya share_target -- dan aplikasi tidak pernah
+// muncul di share sheet. Tidak ada error, tidak ada logging, cuma
+// "kok ESP-Nav tidak ada?". Test ini menjaga supaya tidak terulang.
+
+const swSrc = read('sw.js');
+const mf    = JSON.parse(read('manifest.json'));
+const ver   = (swSrc.match(/const VERSION\s*=\s*'([^']*)'/) || [])[1];
+
+check(!!ver, 'sw.js: VERSION terdefinisi');
+check(/esp32nav-shell-\$\{VERSION\}/.test(swSrc),
+  'sw.js: nama cache diturunkan dari VERSION');
+check(/['"]\.\/manifest\.json['"]/.test(swSrc),
+  'sw.js: manifest.json ada di SHELL_ASSETS, jadi bisa di-refresh via VERSION');
+check(!!mf.share_target,
+  'manifest.json: share_target terdaftar (ini yang bikin app muncul di share sheet)');
+check(mf.share_target && mf.share_target.method === 'POST',
+  'manifest.json: share_target memakai POST, bukan GET');
+
+// ══════════════════════════════════════════════
 //  Hasil
 // ══════════════════════════════════════════════
 

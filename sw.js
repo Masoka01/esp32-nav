@@ -33,7 +33,12 @@
  * halaman basi yang terus muncul dari cache.
  */
 
-const VERSION = 'v1';
+// Naikkan setiap kali isi sw.js berubah. Ini bukan formalitas: nama cache
+// deriving dari VERSION, dan manifest.json dilayani cache-first. Kalau
+// VERSION tidak naik, HP tetap memakai manifest LAMA dari cache -- termasuk
+// manifest yang belum punya share_target -- sehingga aplikasi tidak muncul
+// di share sheet milik Google Maps.
+const VERSION = 'v2';
 const SHELL_CACHE = `esp32nav-shell-${VERSION}`;
 
 // Hanya file shell. Sengaja TIDAK memakai URL absolut supaya path tetap
