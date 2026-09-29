@@ -233,7 +233,6 @@ export default function Home() {
     <>
       <div id="app">
         <div id="top-panel">
-          <div className="app-title">ESP32 NAVIGATOR</div>
           <div style={{ position: 'relative' }}>
             <SearchBar
               onDestination={selectDestination} onLocate={locateMe}
