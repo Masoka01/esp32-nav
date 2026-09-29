@@ -20,6 +20,11 @@ next-env.d.ts
 # Vercel
 .vercel
 
+# Artefak tooling
+# Snapshot halaman dari Playwright MCP saat pengujian browser. Isinya rekaman
+# sesi tes, bukan bagian aplikasi.
+.playwright-mcp/
+
 # OS / editor
 .DS_Store
 *.swp
