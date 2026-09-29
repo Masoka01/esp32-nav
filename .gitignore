@@ -1,0 +1,35 @@
+# Dependency
+/node_modules
+
+# Build output
+/.next/
+/out/
+next-env.d.ts
+
+# TypeScript incremental build info.
+# File ini dibuat ulang setiap `tsc` jalan dan hanya jadi ballast di git —
+# masuk git justru memicu konflik palsu setiap build.
+/*.tsbuildinfo
+
+# Env
+# .env.example sengaja TIDAK di-ignore: itu dokumentasi untuk siapa pun yang
+# clone repo ini. Yang di-ignore hanya file yang berisi nilai asli.
+.env*.local
+.env
+
+# Vercel
+.vercel
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log

@@ -1,0 +1,80 @@
+rules_version = '2';
+
+// Rules Firestore untuk ESP32 Navigator.
+//
+// Konteks yang menentukan: aplikasi ini TIDAK punya autentikasi. Tidak ada
+// getAuth, tidak ada signIn, tidak ada currentUser — di seluruh src/ tidak ada
+// satupun pemanggilan auth. Artinya setiap request datang dari client yang tidak
+// bisa dibedakan dari client mana pun.
+//
+// Konsekuensinya jujur dan perlu dibacakan: collection `favorites` di bawah ini
+// MEMBUKA data publik. Siapa pun yang tahu nama project dan nama collection bisa
+// membaca semua tujuan yang tersimpan, dan bisa menambahkan atau menghapus
+// entri. Rules yang menutup semua jalan akan menghasilkan
+// "Missing or insufficient permissions" persis seperti yang terlihat sekarang.
+//
+// Kalau ini tidak bisa diterima, perbaikannya BUKAN menajamkan rules, tapi
+// menambahkan autentikasi lebih dulu, lalu mengunci rules per-user. Rules yang
+// diketat tanpa auth hanya mengubah "semua orang bisa baca" menjadi
+// "tidak ada yang bisa baca", termasuk Anda sendiri.
+//
+// Ringkasnya: rules di bawah benar untuk aplikasi tanpa login, dan tidak
+// pernah jadi benar untuk aplikasi dengan login. Kalau auth ditambahkan
+// kemudian, blok `match /favorites` harus ditulis ulang.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /favorites/{favoriteId} {
+      // Semua orang bisa membaca: dipakai untuk mengisi daftar favorit.
+      allow read: if true;
+
+      // Semua orang bisa membuat, TAPI hanya dokumen yang bentuknya benar.
+      // validate() menolak dokumen kosong dan nilai di luar tipe yang
+      // dipakai aplikasi ini (lihat Favorite di src/types/index.ts).
+      //
+      // Perhatikan `request.resource`: yang divalidasi adalah dokumen yang
+      // AKAN ADA setelah write, bukan dokumen sekarang. Untuk update, ini juga
+      // berarti một dokumen yang ada tidak bisa diubah menjadi tidak valid.
+      allow create: if validFavorite(request.resource.data);
+
+      allow update: if validFavorite(request.resource.data);
+
+      // Hapus: tidak ada validate(). DocumentReference untuk `deleteDoc` hanya
+      // membawa id, bukan isi dokumen, jadi `resource.data` tidak ada di sini —
+      // memvalidasi data saat delete selalu gagal. Pola yang benar: izinkan
+      // hapus, dan bertumpu pada validasi saat write untuk menjaga isi.
+      allow delete: if true;
+    }
+
+    // Kunci default untuk apa pun yang belum ditulis di atas. Firestore sudah
+    // menolaknya secara default, tapi ditulis eksplisit supaya menambah
+    // collection baru tidak pernah berarti "terbuka tanpa sengaja".
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
+/**
+ * Pastikan dokumen favorit punya bentuk yang memang dibaca aplikasi.
+ *
+ * `is number` di Firestore berlaku juga ke NaN dan Infinity, jadi kedua kasus
+ * itu dikecualikan eksplisit. NaN akan mencoret seluruh hasil query.
+ */
+function validFavorite(data) {
+  return data.keys().hasOnly(['name', 'lat', 'lng', 'savedAt'])
+    && data.name is string
+    && data.name.size() > 0
+    && data.name.size() <= 200
+    && data.lat is number
+    && data.lat >= -90
+    && data.lat <= 90
+    && data.lat != 0.0 / 0.0
+    && data.lng is number
+    && data.lng >= -180
+    && data.lng <= 180
+    && data.lng != 0.0 / 0.0
+    && data.savedAt is number
+    && data.savedAt > 0;
+}

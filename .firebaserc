@@ -1,0 +1,5 @@
+{
+  "projects": {
+    "default": "esp32d3-map"
+  }
+}
