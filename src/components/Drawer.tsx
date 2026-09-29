@@ -65,6 +65,7 @@ export function Drawer({
   const [activeSection, setActiveSection] = useState<Section>('vehicle');
   const [mounted, setMounted] = useState(false);
   const [animating, setAnimating] = useState(false);
+  const [entered, setEntered] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState(0);
@@ -82,6 +83,8 @@ export function Drawer({
   useEffect(() => {
     if (open) {
       setMounted(true);
+      // Reset entered ke false agar animasi masuk bisa jalan dari translateX(100%)
+      setEntered(false);
       previousActiveElement.current = document.activeElement as HTMLElement;
       // Scroll lock yang lebih halus: hanya prevent body scroll, biarkan drawer scroll
       document.body.style.overflow = 'hidden';
@@ -90,7 +93,27 @@ export function Drawer({
         const closeBtn = drawerRef.current?.querySelector('[data-drawer-close]') as HTMLElement;
         closeBtn?.focus();
       }, 0);
+
+      // Trigger animasi masuk di frame berikutnya
+      // Gunakan requestAnimationFrame ganda untuk memastikan browser sudah paint state awal
+      if (!prefersReducedMotion) {
+        let raf2 = 0;
+        const raf1 = requestAnimationFrame(() => {
+          raf2 = requestAnimationFrame(() => {
+            setEntered(true);
+          });
+        });
+        return () => {
+          cancelAnimationFrame(raf1);
+          cancelAnimationFrame(raf2);
+        };
+      } else {
+        // prefers-reduced-motion: langsung tampilkan tanpa animasi
+        setEntered(true);
+      }
     } else if (mounted) {
+      // Reset entered saat mulai menutup
+      setEntered(false);
       // Mulai animasi keluar
       setAnimating(true);
       // Fallback timeout jika transitionend tidak datang (tab disembunyikan, dll)
@@ -274,10 +297,10 @@ export function Drawer({
   // Render null jika belum mounted (belum buka) atau sudah unmount (animasi keluar selesai)
   if (!mounted) return null;
 
-  // Class untuk animasi: .open saat terbuka, tidak ada class saat tertutup
+  // Class untuk animasi: .open saat entered=true, .closing saat animating=true
   // Saat drag, kita override transform via style inline
-  const drawerClasses = `drawer${prefersReducedMotion ? ' no-animation' : ''} ${open && !animating ? 'open' : ''} ${animating ? 'closing' : ''}`;
-  const backdropClasses = `drawer-backdrop${prefersReducedMotion ? ' no-animation' : ''} ${open && !animating ? 'open' : ''} ${animating ? 'closing' : ''}`;
+  const drawerClasses = `drawer${prefersReducedMotion ? ' no-animation' : ''} ${entered && !animating ? 'open' : ''} ${animating ? 'closing' : ''}`;
+  const backdropClasses = `drawer-backdrop${prefersReducedMotion ? ' no-animation' : ''} ${entered && !animating ? 'open' : ''} ${animating ? 'closing' : ''}`;
 
   // Inline style untuk drag offset
   const drawerStyle: React.CSSProperties = {
