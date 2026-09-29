@@ -2,9 +2,19 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import type { NominatimResult, BLEStatus } from '@/types';
 import { toast } from '@/components/Toast';
+import { looksLikeUrl } from '@/lib/resolve';
 
 interface Props {
   onDestination: (lat: number, lng: number, name: string) => void;
+  /**
+   * Dipanggil saat user menekan Enter pada teks yang berupa tautan.
+   *
+   * Saran geocoding punya jalurnya sendiri — user mengklik salah satu saran —
+   * jadi teks tautan tidak pernah sampai ke sana. Tanpa jalur ini, menempel
+   * short link lalu menekan Enter benar-benar tidak melakukan apa-apa: tidak
+   * ada handler submit sama sekali, dan geocoder hanya diam.
+   */
+  onSubmitText?: (text: string) => void;
   onLocate: () => void;
   onMenu: () => void;
   bleStatus?: BLEStatus;
@@ -20,6 +30,7 @@ const geocodeCache = new Map<string, NominatimResult[]>();
 
 export function SearchBar({
   onDestination, onLocate, onMenu, bleStatus,
+  onSubmitText,
   mapsConfirm, onConfirmAccept, onConfirmReject,
   defaultValue = '',
   canClear = false,
@@ -50,6 +61,9 @@ export function SearchBar({
     setValue(q);
     clearTimeout(timerRef.current);
     if (q.length < 3) { setShowSuggestions(false); return; }
+    // Teks tautan bukan query geocoding. Mengirimnya ke Nominatim tidak pernah
+    // menghasilkan saran yang berguna, hanya satu request sia-sia per ketikan.
+    if (looksLikeUrl(q.trim())) { setSuggestions([]); setShowSuggestions(false); return; }
     if (geocodeCache.has(q)) { setSuggestions(geocodeCache.get(q)!); setShowSuggestions(true); return; }
     timerRef.current = setTimeout(() => fetchSuggestions(q), 1000);
   };
@@ -58,6 +72,18 @@ export function SearchBar({
     setValue(item.display_name);
     setShowSuggestions(false);
     onDestination(parseFloat(item.lat), parseFloat(item.lon), item.display_name);
+  };
+
+  const handleSubmit = () => {
+    const q = value.trim();
+    if (!q) return;
+    // Tautan: teruskan ke pemroses tautan di halaman, bukan ke geocoder.
+    if (looksLikeUrl(q)) { setSuggestions([]); setShowSuggestions(false); onSubmitText?.(q); return; }
+    // Teks biasa: Enter memakai saran teratas kalau ada — sama seperti
+    // perilaku kolom pencarian peta mana pun. Sebelumnya Enter tidak melakukan
+    // apa-apa sama sekali, jadi mengetiknya terasa seperti tombol mati.
+    const top = suggestions[0];
+    if (showSuggestions && top) selectSuggestion(top);
   };
 
   // Close on outside click
@@ -82,6 +108,7 @@ export function SearchBar({
           autoComplete="off"
           value={value}
           onChange={handleInput}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSubmit(); } }}
           onFocus={() => { if (suggestions.length > 0) setShowSuggestions(true); }}
         />
 

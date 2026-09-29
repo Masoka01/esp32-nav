@@ -192,7 +192,7 @@ export default function Home() {
     }
     const result = parseMapsLink(raw);
     if (result.ok) { setMapsConfirm({ name: result.name!, lat: result.lat!, lng: result.lng!, exact: !!result.exact }); setPendingConfirm({ lat: result.lat!, lng: result.lng!, name: result.name! }); }
-    else if (result.reason === 'short-link') toast('Short link tidak bisa dibuka dari browser. Pakai bookmarklet.')
+    else if (result.reason === 'short-link') toast('Short link tidak bisa dibaca.')
     else toast('Link tidak dikenali sebagai link Google Maps.');
   }, []);
 
@@ -236,6 +236,7 @@ export default function Home() {
           <div style={{ position: 'relative' }}>
             <SearchBar
               onDestination={selectDestination} onLocate={locateMe}
+              onSubmitText={handleMapsInput}
               onMenu={() => setDrawerOpen(true)}
               canClear={!!destName}
               onClear={clearDestination}

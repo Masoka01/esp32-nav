@@ -9,7 +9,7 @@ const REASON_TEXT: Record<string, string> = {
   'no-redirect':        'Tautan itu tidak mengarah ke peta.',
   'too-many-hops':      'Rantai pengalihan terlalu panjang.',
   'timeout':            'Server terlalu lama menjawab.',
-  'fetch-failed':       'Server tidak bisa menghubungi Google.',
+  'fetch-failed':       'Tidak bisa menghubungi server. Cek koneksi internet.',
   'bad-location':       'Tautan itu tidak valid.',
 };
 
