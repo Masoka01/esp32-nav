@@ -6,7 +6,7 @@ interface Props {
   onToggle: () => void;
 }
 
-export function BLEPanel({ status, onToggle }: Props) {
+export function BLESection({ status, onToggle }: Props) {
   const dotClass = status.state === 'connected'
     ? 'ble-dot connected'
     : status.state === 'connecting'
@@ -26,15 +26,17 @@ export function BLEPanel({ status, onToggle }: Props) {
       : 'Hubungkan';
 
   return (
-    <div className="ble-bar">
-      <div className={dotClass} />
-      <span className="ble-label">{label}</span>
-      <button
-        className={`btn-ble${status.state === 'connected' ? ' connected' : ''}`}
-        onClick={onToggle}
-      >
-        {btnText}
-      </button>
+    <div className="ble-section">
+      <div className="ble-bar">
+        <div className={dotClass} />
+        <span className="ble-label">{label}</span>
+        <button
+          className={`btn-ble${status.state === 'connected' ? ' connected' : ''}`}
+          onClick={onToggle}
+        >
+          {btnText}
+        </button>
+      </div>
     </div>
   );
 }

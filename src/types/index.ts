@@ -7,6 +7,8 @@ export interface RouteStep {
   distance: number;
 }
 
+export type VehicleType = 'car' | 'motor';
+
 export interface AppState {
   userLat: number | null;
   userLng: number | null;
@@ -22,6 +24,9 @@ export interface AppState {
   bleChar: any | null;
   wakeLock: WakeLockSentinel | null;
   watchId: number | null;
+  vehicle: VehicleType;
+  avoidTolls: boolean;
+  avoidHighways: boolean;
 }
 
 export interface StoredTrip {

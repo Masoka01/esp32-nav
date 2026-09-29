@@ -16,4 +16,7 @@ export const state: AppState = {
   bleChar: null,
   wakeLock: null,
   watchId: null,
+  vehicle: 'motor',
+  avoidTolls: true,
+  avoidHighways: true,
 };

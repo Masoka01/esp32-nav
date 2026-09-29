@@ -1,25 +1,29 @@
 'use client';
 import { useState, useRef, useEffect, useCallback } from 'react';
-import type { NominatimResult } from '@/types';
+import type { NominatimResult, BLEStatus } from '@/types';
 import { toast } from '@/components/Toast';
 
 interface Props {
   onDestination: (lat: number, lng: number, name: string) => void;
   onLocate: () => void;
-  onBookmarklet: () => void;
-  bookmarkletOpen: boolean;
+  onMenu: () => void;
+  bleStatus?: BLEStatus;
   mapsConfirm?: { name: string; lat: number; lng: number; exact: boolean } | null;
   onConfirmAccept: () => void;
   onConfirmReject: () => void;
   defaultValue?: string;
+  canClear?: boolean;
+  onClear?: () => void;
 }
 
 const geocodeCache = new Map<string, NominatimResult[]>();
 
 export function SearchBar({
-  onDestination, onLocate, onBookmarklet, bookmarkletOpen,
+  onDestination, onLocate, onMenu, bleStatus,
   mapsConfirm, onConfirmAccept, onConfirmReject,
   defaultValue = '',
+  canClear = false,
+  onClear,
 }: Props) {
   const [value, setValue] = useState(defaultValue);
   const [suggestions, setSuggestions] = useState<NominatimResult[]>([]);
@@ -112,13 +116,22 @@ export function SearchBar({
         )}
       </div>
 
+      {canClear && onClear && (
+        <button
+          className="btn-icon btn-clear"
+          title="Hapus tujuan dan rute"
+          aria-label="Hapus tujuan dan rute"
+          onClick={onClear}
+        >
+          🗑
+        </button>
+      )}
       <button className="btn-icon" title="Lokasi saya" onClick={onLocate}>📍</button>
-      <button
-        className={`btn-icon${bookmarkletOpen ? ' active' : ''}`}
-        title="Kirim dari Google Maps"
-        onClick={onBookmarklet}
-      >
-        🔗
+      <button className="btn-icon" title="Menu" onClick={onMenu}>
+        ☰
+        {bleStatus && (
+          <span className={`menu-ble-dot${bleStatus.state === 'connected' ? ' connected' : bleStatus.state === 'connecting' ? ' connecting' : ''}`} />
+        )}
       </button>
     </div>
   );

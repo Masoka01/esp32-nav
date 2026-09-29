@@ -13,19 +13,19 @@ export function NavControls({ visible, navigating, awakeNote, awakeWarn, onStart
   if (!visible) return null;
 
   return (
-    <div className="nav-controls">
+    <div className="nav-controls-float" role="region" aria-label="Kontrol navigasi">
       {!navigating && (
-        <button className="nav-btn btn-start" onClick={onStart}>
+        <button className="nav-btn-float btn-start-float" onClick={onStart} aria-label="Mulai navigasi">
           Mulai Navigasi
         </button>
       )}
       {navigating && (
-        <button className="nav-btn btn-stop" onClick={onStop}>
+        <button className="nav-btn-float btn-stop-float" onClick={onStop} aria-label="Berhenti navigasi">
           Berhenti
         </button>
       )}
       {awakeNote && (
-        <div className={`awake-note${awakeWarn ? ' warn' : ''}`}>
+        <div className={`awake-note-float${awakeWarn ? ' warn' : ''}`} role="status" aria-live="assertive">
           {awakeNote}
         </div>
       )}

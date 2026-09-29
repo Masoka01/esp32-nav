@@ -4,11 +4,10 @@ import { buildBookmarklet, detectPlatform, BM_HELP } from '@/lib/share';
 import { toast } from './Toast';
 
 interface Props {
-  open: boolean;
   onClose: () => void;
 }
 
-export function BookmarkletPanel({ open, onClose }: Props) {
+export function BookmarkletContent({ onClose }: Props) {
   const codeRef = useRef<HTMLTextAreaElement>(null);
 
   const platform = typeof window !== 'undefined' ? detectPlatform() : 'desktop';
@@ -17,13 +16,13 @@ export function BookmarkletPanel({ open, onClose }: Props) {
     : '';
 
   useEffect(() => {
-    if (open && codeRef.current) {
+    if (codeRef.current) {
       codeRef.current.value = bmCode;
       // Auto-resize
       codeRef.current.style.height = 'auto';
       codeRef.current.style.height = codeRef.current.scrollHeight + 'px';
     }
-  }, [open, bmCode]);
+  }, [bmCode]);
 
   const handleCopy = async () => {
     try {
@@ -36,11 +35,9 @@ export function BookmarkletPanel({ open, onClose }: Props) {
     }
   };
 
-  if (!open) return null;
-
   return (
-    <div className="bookmarklet-panel">
-      <div className="bm-title">Kirim tujuan dari Google Maps</div>
+    <div className="drawer-section">
+      <h2 className="section-title">Kirim tujuan dari Google Maps</h2>
 
       {platform === 'ios' ? (
         <div className="bm-alt">
@@ -55,7 +52,14 @@ export function BookmarkletPanel({ open, onClose }: Props) {
                 {' '}<span className="bm-hint">{BM_HELP[platform].save}</span></li>
             <li>Buka lokasi di Google Maps, lalu <span dangerouslySetInnerHTML={{ __html: BM_HELP[platform].run }} />.</li>
           </ol>
-          <textarea ref={codeRef} className="bm-code" readOnly rows={3} spellCheck={false} defaultValue={bmCode} />
+          <textarea
+            ref={codeRef}
+            className="bm-code"
+            readOnly
+            rows={3}
+            spellCheck={false}
+            defaultValue={bmCode}
+          />
           {BM_HELP[platform].note && (
             <div className="bm-note">{BM_HELP[platform].note}</div>
           )}

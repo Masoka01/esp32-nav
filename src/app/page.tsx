@@ -2,24 +2,24 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import type { MapHandle } from '@/components/Map';
-import { BLEPanel } from '@/components/BLEPanel';
 import { Instruction } from '@/components/Instruction';
 import { NavControls } from '@/components/NavControls';
 import { SearchBar } from '@/components/SearchBar';
-import { BookmarkletPanel } from '@/components/BookmarkletPanel';
-import { Favorites } from '@/components/Favorites';
+import { Drawer } from '@/components/Drawer';
+import { FavoritesContent } from '@/components/FavoritesContent';
+import { BookmarkletContent } from '@/components/BookmarkletContent';
 import { Toast, toast } from '@/components/Toast';
 import { useBLE } from '@/hooks/useBLE';
 import { useFavorites } from '@/hooks/useFavorites';
 import { state } from '@/lib/state';
 import { fetchRoute, formatDist, formatDur, haversine } from '@/lib/route';
-import { saveTrip, loadTrip } from '@/lib/store';
+import { saveTrip, loadTrip, clearStoredTrip, loadVehiclePrefs, saveVehiclePrefs } from '@/lib/store';
 import { sendToBLE } from '@/lib/ble';
 import { requestWakeLock, releaseWakeLock } from '@/lib/wake';
 import { parseMapsLink } from '@/lib/parse';
 import { resolveShortLink, looksLikeUrl, ResolveError } from '@/lib/resolve';
 import { readIncomingLink, cleanIncomingLink } from '@/lib/share';
-import type { RouteStep } from '@/types';
+import type { RouteStep, VehicleType } from '@/types';
 
 const MapComponent = dynamic(
   () => import('@/components/Map').then(m => m.Map),
@@ -37,9 +37,12 @@ export default function Home() {
   const [awakeNote, setAwakeNote]     = useState('');
   const [awakeWarn, setAwakeWarn]     = useState(false);
   const [searchValue, setSearchValue] = useState('');
-  const [bmOpen, setBmOpen]           = useState(false);
+  const [drawerOpen, setDrawerOpen]   = useState(false);
   const [mapsConfirm, setMapsConfirm] = useState<{ name: string; lat: number; lng: number; exact: boolean } | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<{ lat: number; lng: number; name: string } | null>(null);
+  const [vehicle, setVehicle]                 = useState<VehicleType>(state.vehicle);
+  const [avoidTolls, setAvoidTolls]           = useState(state.avoidTolls);
+  const [avoidHighways, setAvoidHighways]     = useState(state.avoidHighways);
 
   const { bleStatus, toggle: toggleBLE } = useBLE(toast);
   const { favorites, loading: favLoading, add: addFav, remove: removeFav } = useFavorites();
@@ -52,7 +55,11 @@ export default function Home() {
   const calcRoute = useCallback(async () => {
     if (!state.userLat || !state.destLat) return;
     try {
-      const result = await fetchRoute(state.userLat, state.userLng!, state.destLat, state.destLng!);
+      const result = await fetchRoute(state.userLat, state.userLng!, state.destLat, state.destLng!, {
+        vehicle: state.vehicle,
+        avoidTolls: state.avoidTolls,
+        avoidHighways: state.avoidHighways,
+      });
       if (!result) { toast('Rute tidak ditemukan'); return; }
       setSteps(result.steps);
       state.steps = result.steps;
@@ -63,6 +70,18 @@ export default function Home() {
       mapRef.current?.fitRoute(result.coords);
     } catch { toast('Gagal mengambil rute'); }
   }, []);
+
+  // Perubahan kendaraan/preferensi disimpan, lalu rute dihitung ulang otomatis
+  const changeVehiclePrefs = useCallback((patch: Partial<{
+    vehicle: VehicleType; avoidTolls: boolean; avoidHighways: boolean;
+  }>) => {
+    if (patch.vehicle !== undefined)     { state.vehicle = patch.vehicle; setVehicle(patch.vehicle); }
+    if (patch.avoidTolls !== undefined)  { state.avoidTolls = patch.avoidTolls; setAvoidTolls(patch.avoidTolls); }
+    if (patch.avoidHighways !== undefined) { state.avoidHighways = patch.avoidHighways; setAvoidHighways(patch.avoidHighways); }
+    saveVehiclePrefs({ vehicle: state.vehicle, avoidTolls: state.avoidTolls, avoidHighways: state.avoidHighways });
+    // hanya hitung ulang kalau sudah ada titik asal dan tujuan
+    if (state.userLat && state.destLat) calcRoute();
+  }, [calcRoute]);
 
   const selectDestination = useCallback(async (lat: number, lng: number, name: string) => {
     state.destLat = lat; state.destLng = lng; state.destName = name;
@@ -143,6 +162,21 @@ export default function Home() {
     releaseWakeLock(setNote); toast('Navigasi dihentikan');
   }, [setNote]);
 
+  // Hapus tujuan: kalau sedang navigating, berhenti dulu lalu bersihkan semua
+  const clearDestination = useCallback(() => {
+    if (state.navigating) stopNavigation();
+
+    state.destLat = null; state.destLng = null; state.destName = null;
+    state.steps = []; state.currentStep = 0;
+    state.pendingRestore = null; state.pendingRoute = null;
+
+    setSteps([]); setCurrentStep(0); setDestName(null); setSearchValue(''); setRouteInfo(null);
+    mapRef.current?.clearRoute();
+    mapRef.current?.clearDestMarker();
+    clearStoredTrip();
+    toast('Tujuan dihapus');
+  }, [stopNavigation]);
+
   const handleMapsInput = useCallback(async (input: string) => {
     const raw = input.trim();
     if (!raw) return;
@@ -163,6 +197,13 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    // pulihkan preferensi kendaraan dari sesi sebelumnya
+    const prefs = loadVehiclePrefs();
+    state.vehicle = prefs.vehicle ?? state.vehicle;
+    state.avoidTolls = prefs.avoidTolls ?? state.avoidTolls;
+    state.avoidHighways = prefs.avoidHighways ?? state.avoidHighways;
+    setVehicle(state.vehicle); setAvoidTolls(state.avoidTolls); setAvoidHighways(state.avoidHighways);
+
     locateMe();
     const trip = loadTrip();
     if (trip) {
@@ -183,9 +224,10 @@ export default function Home() {
   }, [locateMe, calcRoute, handleMapsInput, setNote]);
 
   const currentStepData = steps[currentStep];
-  const instrIcon = currentStepData?.icon ?? '🗺️';
-  const instrText = navigating && currentStepData ? currentStepData.instruction : destName ? `Tujuan: ${destName}` : 'Cari tujuan untuk mulai navigasi';
-  const instrDist = navigating && currentStepData ? formatDist(currentStepData.distance) : '';
+  const hasInstr = navigating && currentStepData;
+  const instrIcon = hasInstr ? currentStepData.icon : destName ? '📍' : undefined;
+  const instrText = hasInstr ? currentStepData.instruction : destName ? `Tujuan: ${destName}` : undefined;
+  const instrDist = hasInstr ? formatDist(currentStepData.distance) : undefined;
 
   return (
     <>
@@ -195,33 +237,56 @@ export default function Home() {
           <div style={{ position: 'relative' }}>
             <SearchBar
               onDestination={selectDestination} onLocate={locateMe}
-              onBookmarklet={() => setBmOpen(o => !o)} bookmarkletOpen={bmOpen}
+              onMenu={() => setDrawerOpen(true)}
+              canClear={!!destName}
+              onClear={clearDestination}
+              bleStatus={bleStatus}
               mapsConfirm={mapsConfirm}
               onConfirmAccept={() => { if (pendingConfirm) selectDestination(pendingConfirm.lat, pendingConfirm.lng, pendingConfirm.name); setMapsConfirm(null); setPendingConfirm(null); }}
               onConfirmReject={() => { setMapsConfirm(null); setPendingConfirm(null); }}
               defaultValue={searchValue}
             />
-            <BookmarkletPanel open={bmOpen} onClose={() => setBmOpen(false)} />
           </div>
         </div>
 
         <div id="map">
-          <MapComponent ref={mapRef} />
+          <MapComponent
+            ref={mapRef}
+            onReady={() => {
+              // Peta dimuat dinamis, jadi saat efek mount berjalan mapRef masih null
+              // dan penanda sempat terlewat. Terapkan ulang dari state global.
+              if (state.destLat != null) mapRef.current?.setDestMarker(state.destLat, state.destLng!);
+              if (state.userLat != null) mapRef.current?.setUserMarker(state.userLat, state.userLng!);
+            }}
+          />
         </div>
 
         <div id="bottom-panel">
-          <BLEPanel status={bleStatus} onToggle={toggleBLE} />
           <Instruction icon={instrIcon} text={instrText} dist={instrDist} totalDist={routeInfo?.dist} totalDur={routeInfo?.dur} showInfo={!!routeInfo && !navigating} />
           <NavControls visible={steps.length > 0} navigating={navigating} awakeNote={awakeNote} awakeWarn={awakeWarn} onStart={startNavigation} onStop={stopNavigation} />
-          <Favorites
-            favorites={favorites} loading={favLoading}
-            currentDestName={destName} currentDestLat={state.destLat} currentDestLng={state.destLng}
-            onSelect={selectDestination}
-            onSave={async (name, lat, lng) => { await addFav(name, lat, lng); toast('Tersimpan ke favorit ⭐'); }}
-            onDelete={async (id) => { await removeFav(id); toast('Favorit dihapus'); }}
-          />
         </div>
       </div>
+      <Drawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        favorites={favorites}
+        favLoading={favLoading}
+        currentDestName={destName}
+        currentDestLat={state.destLat}
+        currentDestLng={state.destLng}
+        onSelectFav={selectDestination}
+        onSaveFav={async (name, lat, lng) => { await addFav(name, lat, lng); toast('Tersimpan ke favorit ⭐'); }}
+        onDeleteFav={async (id) => { await removeFav(id); toast('Favorit dihapus'); }}
+        bleStatus={bleStatus}
+        onToggleBLE={toggleBLE}
+        vehicle={vehicle}
+        onChangeVehicle={(v) => changeVehiclePrefs({ vehicle: v })}
+        avoidTolls={avoidTolls}
+        onChangeAvoidTolls={(v) => changeVehiclePrefs({ avoidTolls: v })}
+        avoidHighways={avoidHighways}
+        onChangeAvoidHighways={(v) => changeVehiclePrefs({ avoidHighways: v })}
+        canReRoute={!!state.destLat && !!state.userLat}
+      />
       <Toast />
     </>
   );

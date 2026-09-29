@@ -1,13 +1,13 @@
 'use client';
 import { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
+import L from 'leaflet';
 import type { RouteStep } from '@/types';
-
-declare const L: any;
 
 export interface MapHandle {
   setView: (lat: number, lng: number, zoom?: number) => void;
   setUserMarker: (lat: number, lng: number) => void;
   setDestMarker: (lat: number, lng: number) => void;
+  clearDestMarker: () => void;
   drawRoute: (coords: [number, number][]) => void;
   fitRoute: (coords: [number, number][]) => void;
   clearRoute: () => void;
@@ -15,6 +15,7 @@ export interface MapHandle {
 
 interface Props {
   onMapClick?: (lat: number, lng: number) => void;
+  onReady?: () => void;
 }
 
 const USER_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
@@ -27,7 +28,7 @@ const DEST_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height
   <circle cx="14" cy="14" r="6" fill="#fff"/>
 </svg>`;
 
-export const Map = forwardRef<MapHandle, Props>(function Map({ onMapClick }, ref) {
+export const Map = forwardRef<MapHandle, Props>(function Map({ onMapClick, onReady }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef      = useRef<any>(null);
   const userMarker  = useRef<any>(null);
@@ -46,6 +47,9 @@ export const Map = forwardRef<MapHandle, Props>(function Map({ onMapClick }, ref
       m.on('click', (e: any) => onMapClick(e.latlng.lat, e.latlng.lng));
     }
     mapRef.current = m;
+    // Peta baru siap sekarang. Halaman leveraging onReady untuk menandai ulang
+    // marker yang mungkin saja terlewat saat mapRef masih null.
+    onReady?.();
   }, [onMapClick]);
 
   useImperativeHandle(ref, () => ({
@@ -74,10 +78,16 @@ export const Map = forwardRef<MapHandle, Props>(function Map({ onMapClick }, ref
       if (destMarker.current) destMarker.current.setLatLng([lat, lng]);
       else destMarker.current = L.marker([lat, lng], { icon }).addTo(mapRef.current);
     },
+    clearDestMarker() {
+      if (destMarker.current && mapRef.current) {
+        mapRef.current.removeLayer(destMarker.current);
+        destMarker.current = null;
+      }
+    },
     drawRoute(coords) {
       if (!mapRef.current) return;
       if (routeLayer.current) mapRef.current.removeLayer(routeLayer.current);
-      const latlngs = coords.map(([lng, lat]) => [lat, lng]);
+      const latlngs = coords.map(([lng, lat]) => [lat, lng] as [number, number]);
       routeLayer.current = L.polyline(latlngs, {
         color: '#4f8ef7', weight: 5, opacity: 0.85,
         lineCap: 'round', lineJoin: 'round',
@@ -85,7 +95,7 @@ export const Map = forwardRef<MapHandle, Props>(function Map({ onMapClick }, ref
     },
     fitRoute(coords) {
       if (!mapRef.current) return;
-      const latlngs = coords.map(([lng, lat]) => [lat, lng]);
+      const latlngs = coords.map(([lng, lat]) => [lat, lng] as [number, number]);
       mapRef.current.fitBounds(L.latLngBounds(latlngs), { padding: [40, 40] });
     },
     clearRoute() {
