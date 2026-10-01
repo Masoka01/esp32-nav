@@ -3,6 +3,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import type { NominatimResult, BLEStatus } from '@/types';
 import { toast } from '@/components/Toast';
 import { looksLikeUrl } from '@/lib/resolve';
+import { searchPlaces, peekPlaces } from '@/lib/geocode';
 
 interface Props {
   onDestination: (lat: number, lng: number, name: string) => void;
@@ -18,15 +19,13 @@ interface Props {
   onLocate: () => void;
   onMenu: () => void;
   bleStatus?: BLEStatus;
-  mapsConfirm?: { name: string; lat: number; lng: number; exact: boolean } | null;
+  mapsConfirm?: { name: string; lat: number; lng: number; exact: boolean; source?: 'link' | 'map' } | null;
   onConfirmAccept: () => void;
   onConfirmReject: () => void;
   defaultValue?: string;
   canClear?: boolean;
   onClear?: () => void;
 }
-
-const geocodeCache = new Map<string, NominatimResult[]>();
 
 export function SearchBar({
   onDestination, onLocate, onMenu, bleStatus,
@@ -45,12 +44,8 @@ export function SearchBar({
   useEffect(() => { setValue(defaultValue); }, [defaultValue]);
 
   const fetchSuggestions = useCallback(async (q: string) => {
-    if (geocodeCache.has(q)) { setSuggestions(geocodeCache.get(q)!); setShowSuggestions(true); return; }
     try {
-      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&countrycodes=id`;
-      const res  = await fetch(url, { headers: { 'Accept-Language': 'id' } });
-      const data = await res.json();
-      geocodeCache.set(q, data);
+      const data = await searchPlaces(q);
       setSuggestions(data);
       setShowSuggestions(data.length > 0);
     } catch { toast('Gagal mencari lokasi'); }
@@ -64,7 +59,8 @@ export function SearchBar({
     // Teks tautan bukan query geocoding. Mengirimnya ke Nominatim tidak pernah
     // menghasilkan saran yang berguna, hanya satu request sia-sia per ketikan.
     if (looksLikeUrl(q.trim())) { setSuggestions([]); setShowSuggestions(false); return; }
-    if (geocodeCache.has(q)) { setSuggestions(geocodeCache.get(q)!); setShowSuggestions(true); return; }
+    const cached = peekPlaces(q);
+    if (cached) { setSuggestions(cached); setShowSuggestions(true); return; }
     timerRef.current = setTimeout(() => fetchSuggestions(q), 1000);
   };
 
@@ -132,8 +128,12 @@ export function SearchBar({
             <div className="mc-coord">
               {mapsConfirm.lat.toFixed(6)}, {mapsConfirm.lng.toFixed(6)}
             </div>
-            <div className={`mc-tag${mapsConfirm.exact ? '' : ' approx'}`}>
-              {mapsConfirm.exact ? 'Koordinat tepat' : 'Koordinat perkiraan'}
+            <div className={`mc-tag${mapsConfirm.exact ? '' : ' approx'}${mapsConfirm.source === 'map' ? ' from-map' : ''}`}>
+              {mapsConfirm.source === 'map'
+                ? 'Dari peta'
+                : mapsConfirm.exact
+                ? 'Koordinat tepat'
+                : 'Koordinat perkiraan'}
             </div>
             <div className="mc-actions">
               <button onClick={onConfirmReject}>Batal</button>

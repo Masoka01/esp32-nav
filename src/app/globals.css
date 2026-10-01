@@ -119,6 +119,7 @@ html, body {
   border: 1px solid var(--border); color: var(--text-muted);
 }
 .mc-tag.approx { color: #d8a13a; border-color: #d8a13a; }
+.mc-tag.from-map { color: var(--accent2); border-color: var(--accent2); }
 .mc-actions { display: flex; gap: 8px; margin-top: 10px; }
 .mc-actions button {
   flex: 1; padding: 9px 12px; font-size: 13px; font-family: var(--font);
@@ -189,6 +190,62 @@ html, body {
   flex: 1;
   min-height: 0;
   z-index: 1;
+  position: relative;
+}
+
+/* Banner mode pilih titik. Menempel di atas peta, tidak menutupi seluruh
+   bidang, jadi user masih bisa mengetuk peta di bawahnya. */
+.pick-point-banner {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  z-index: 100;
+  background: var(--surface2);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  animation: slideDownFade 0.25s ease-out;
+}
+
+@keyframes slideDownFade {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.pick-point-banner span {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.pick-point-banner strong {
+  color: var(--accent);
+}
+
+.pick-point-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: var(--font);
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.15s, color 0.15s;
+  min-height: 36px;
+}
+
+.pick-point-cancel:hover {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 /* ── BOTTOM PANEL ── */
@@ -439,6 +496,13 @@ html, body {
 
 /* Leaflet overrides */
 .leaflet-control-attribution { font-size: 9px !important; }
+/* Peta dibuat gelap dengan membalik tile OSM yang terang. Ini menghemat daya
+   layar OLED selama navigasi (layar dijaga menyala oleh wake lock), tanpa
+   memerlukan penyedia tile gelap, API key, atau perubahan lisensi. Rute dan
+   marker tidak ikut terpengaruh karena berada di pane SVG terpisah. */
+.leaflet-tile { filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(1.15) saturate(1.1); }
+/* Latar gelap mencegah kedipan abu terang saat tile sedang dimuat atau di-pan. */
+.leaflet-container { background: #0f1117; }
 
 /* ── DRAWER ── */
 .drawer-backdrop {

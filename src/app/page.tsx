@@ -17,6 +17,7 @@ import { saveTrip, loadTrip, clearStoredTrip, loadVehiclePrefs, saveVehiclePrefs
 import { sendToBLE } from '@/lib/ble';
 import { requestWakeLock, releaseWakeLock } from '@/lib/wake';
 import { parseMapsLink } from '@/lib/parse';
+import { geocodeName } from '@/lib/geocode';
 import { resolveShortLink, looksLikeUrl, ResolveError } from '@/lib/resolve';
 import { readIncomingLink, cleanIncomingLink } from '@/lib/share';
 import type { RouteStep, VehicleType } from '@/types';
@@ -38,8 +39,11 @@ export default function Home() {
   const [awakeWarn, setAwakeWarn]     = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const [drawerOpen, setDrawerOpen]   = useState(false);
-  const [mapsConfirm, setMapsConfirm] = useState<{ name: string; lat: number; lng: number; exact: boolean } | null>(null);
+  const [mapsConfirm, setMapsConfirm] = useState<{ name: string; lat: number; lng: number; exact: boolean; source?: 'link' | 'map' } | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<{ lat: number; lng: number; name: string } | null>(null);
+  // Mode pilih titik di peta (saat geocoding gagal)
+  const [pickPointMode, setPickPointMode] = useState(false);
+  const [pickPointName, setPickPointName] = useState<string>('');
   const [vehicle, setVehicle]                 = useState<VehicleType>(state.vehicle);
   const [avoidTolls, setAvoidTolls]           = useState(state.avoidTolls);
   const [avoidHighways, setAvoidHighways]     = useState(state.avoidHighways);
@@ -177,6 +181,46 @@ export default function Home() {
     toast('Tujuan dihapus');
   }, [stopNavigation]);
 
+  // Tautan Google Maps kadang hanya membawa nama tempat tanpa koordinat.
+  // Ini sering terjadi pada short link yang di-share dari hasil pencarian di
+  // aplikasi mobile: Google mengarahkannya ke /maps/search/?query=NAMA, bukan
+  // ke pin yang punya koordinat. parseMapsLink sengaja menolak menebak, jadi
+  // tebakannya dilakukan di sini dan hasilnya selalu ditandai perkiraan.
+  const confirmFromName = useCallback(async (name: string) => {
+    toast('Mencari koordinat...');
+    try {
+      const hit = await geocodeName(name);
+      if (!hit) {
+        // Geocoding gagal → masuk mode pilih titik di peta
+        setPickPointName(name);
+        setPickPointMode(true);
+        toast('Tempat tidak ditemukan otomatis. Ketuk peta untuk menentukan lokasinya.');
+        return;
+      }
+      setMapsConfirm({ name: hit.name, lat: hit.lat, lng: hit.lng, exact: false, source: 'link' });
+      setPendingConfirm({ lat: hit.lat, lng: hit.lng, name: hit.name });
+    } catch {
+      toast('Gagal mencari koordinat. Coba lagi.');
+    }
+  }, []);
+
+  // Handler untuk klik peta saat mode pilih-titik aktif
+  const handleMapClick = useCallback((lat: number, lng: number) => {
+    if (!pickPointMode) return;
+    // Keluar dari mode pilih-titik, tampilkan konfirmasi dengan koordinat hasil ketukan
+    setPickPointMode(false);
+    setMapsConfirm({
+      name: pickPointName,
+      lat,
+      lng,
+      // Titik yang dipilih user sendiri memang tepat, bukan perkiraan.
+      exact: true,
+      source: 'map',
+    });
+    setPendingConfirm({ lat, lng, name: pickPointName });
+    setPickPointName('');
+  }, [pickPointMode, pickPointName]);
+
   const handleMapsInput = useCallback(async (input: string) => {
     const raw = input.trim();
     if (!raw) return;
@@ -186,15 +230,17 @@ export default function Home() {
         const expanded = await resolveShortLink(raw);
         const result = parseMapsLink(expanded);
         if (result.ok) { setMapsConfirm({ name: result.name!, lat: result.lat!, lng: result.lng!, exact: !!result.exact }); setPendingConfirm({ lat: result.lat!, lng: result.lng!, name: result.name! }); }
-        else toast('Link tidak bisa dibaca: ' + result.reason);
+        else if (result.reason === 'needs-geocode' && result.name) await confirmFromName(result.name);
+        else toast('Link tidak bisa dibaca.');
       } catch (e) { toast(e instanceof ResolveError ? e.userMessage : 'Gagal membuka link'); }
       return;
     }
     const result = parseMapsLink(raw);
     if (result.ok) { setMapsConfirm({ name: result.name!, lat: result.lat!, lng: result.lng!, exact: !!result.exact }); setPendingConfirm({ lat: result.lat!, lng: result.lng!, name: result.name! }); }
+    else if (result.reason === 'needs-geocode' && result.name) await confirmFromName(result.name);
     else if (result.reason === 'short-link') toast('Short link tidak bisa dibaca.')
     else toast('Link tidak dikenali sebagai link Google Maps.');
-  }, []);
+  }, [confirmFromName]);
 
   useEffect(() => {
     // pulihkan preferensi kendaraan dari sesi sebelumnya
@@ -250,8 +296,15 @@ export default function Home() {
         </div>
 
         <div id="map">
+          {pickPointMode && (
+            <div className="pick-point-banner">
+              <span>Mode pilih lokasi: ketuk peta untuk menentukan posisi <strong>{pickPointName}</strong></span>
+              <button className="pick-point-cancel" onClick={() => { setPickPointMode(false); setPickPointName(''); }}>Batal</button>
+            </div>
+          )}
           <MapComponent
             ref={mapRef}
+            onMapClick={handleMapClick}
             onReady={() => {
               // Peta dimuat dinamis, jadi saat efek mount berjalan mapRef masih null
               // dan penanda sempat terlewat. Terapkan ulang dari state global.
