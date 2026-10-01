@@ -3,6 +3,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import type { NominatimResult, BLEStatus } from '@/types';
 import { toast } from '@/components/Toast';
 import { looksLikeUrl } from '@/lib/resolve';
+import { parseCoordinateText } from '@/lib/parse';
 import { searchPlaces, peekPlaces } from '@/lib/geocode';
 
 interface Props {
@@ -19,12 +20,18 @@ interface Props {
   onLocate: () => void;
   onMenu: () => void;
   bleStatus?: BLEStatus;
-  mapsConfirm?: { name: string; lat: number; lng: number; exact: boolean; source?: 'link' | 'map' } | null;
+  mapsConfirm?: { name: string; lat: number; lng: number; exact: boolean } | null;
   onConfirmAccept: () => void;
   onConfirmReject: () => void;
   defaultValue?: string;
   canClear?: boolean;
   onClear?: () => void;
+  /**
+   * Permintaan mengisi kotak pencarian dari luar, mis. saat tautan hanya
+   * membawa nama tanpa koordinat dan geocoding otomatis gagal. `id` naik tiap
+   * permintaan supaya efek tetap terpicu walau query-nya sama.
+   */
+  prefill?: { query: string; id: number } | null;
 }
 
 export function SearchBar({
@@ -34,6 +41,7 @@ export function SearchBar({
   defaultValue = '',
   canClear = false,
   onClear,
+  prefill,
 }: Props) {
   const [value, setValue] = useState(defaultValue);
   const [suggestions, setSuggestions] = useState<NominatimResult[]>([]);
@@ -42,6 +50,24 @@ export function SearchBar({
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { setValue(defaultValue); }, [defaultValue]);
+
+  // Isi kotak dari luar lalu langsung cari saran. Dipakai saat tautan hanya
+  // membawa nama tanpa koordinat dan geocoding otomatis gagal.
+  useEffect(() => {
+    if (!prefill) return;
+    // Isi input ditangani lewat defaultValue (halaman menyetel searchValue),
+    // jadi efek ini cukup memicu pencarian sarannya saja.
+    (async () => {
+      try {
+        const data = await searchPlaces(prefill.query);
+        setSuggestions(data);
+        setShowSuggestions(data.length > 0);
+        if (data.length === 0) toast('Tidak ada hasil. Coba ubah kata kunci.');
+      } catch { toast('Gagal mencari lokasi'); }
+    })();
+    // Sengaja hanya bergantung pada id: query yang sama harus tetap memicu.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill?.id]);
 
   const fetchSuggestions = useCallback(async (q: string) => {
     try {
@@ -58,7 +84,7 @@ export function SearchBar({
     if (q.length < 3) { setShowSuggestions(false); return; }
     // Teks tautan bukan query geocoding. Mengirimnya ke Nominatim tidak pernah
     // menghasilkan saran yang berguna, hanya satu request sia-sia per ketikan.
-    if (looksLikeUrl(q.trim())) { setSuggestions([]); setShowSuggestions(false); return; }
+    if (looksLikeUrl(q.trim()) || parseCoordinateText(q)) { setSuggestions([]); setShowSuggestions(false); return; }
     const cached = peekPlaces(q);
     if (cached) { setSuggestions(cached); setShowSuggestions(true); return; }
     timerRef.current = setTimeout(() => fetchSuggestions(q), 1000);
@@ -74,7 +100,7 @@ export function SearchBar({
     const q = value.trim();
     if (!q) return;
     // Tautan: teruskan ke pemroses tautan di halaman, bukan ke geocoder.
-    if (looksLikeUrl(q)) { setSuggestions([]); setShowSuggestions(false); onSubmitText?.(q); return; }
+    if (looksLikeUrl(q) || parseCoordinateText(q)) { setSuggestions([]); setShowSuggestions(false); onSubmitText?.(q); return; }
     // Teks biasa: Enter memakai saran teratas kalau ada — sama seperti
     // perilaku kolom pencarian peta mana pun. Sebelumnya Enter tidak melakukan
     // apa-apa sama sekali, jadi mengetiknya terasa seperti tombol mati.
@@ -128,12 +154,8 @@ export function SearchBar({
             <div className="mc-coord">
               {mapsConfirm.lat.toFixed(6)}, {mapsConfirm.lng.toFixed(6)}
             </div>
-            <div className={`mc-tag${mapsConfirm.exact ? '' : ' approx'}${mapsConfirm.source === 'map' ? ' from-map' : ''}`}>
-              {mapsConfirm.source === 'map'
-                ? 'Dari peta'
-                : mapsConfirm.exact
-                ? 'Koordinat tepat'
-                : 'Koordinat perkiraan'}
+            <div className={`mc-tag${mapsConfirm.exact ? '' : ' approx'}`}>
+              {mapsConfirm.exact ? 'Koordinat tepat' : 'Koordinat perkiraan'}
             </div>
             <div className="mc-actions">
               <button onClick={onConfirmReject}>Batal</button>

@@ -116,7 +116,11 @@ function isShortLink(u) {
  * @returns {boolean}
  */
 export function isMapsHost(u) {
-  return MAPS_HOSTS.has(u.hostname.toLowerCase()) && u.pathname.startsWith('/maps');
+  const host = u.hostname.toLowerCase();
+  if (!MAPS_HOSTS.has(host)) return false;
+  // maps.google.com/?q=lat,lng punya pathname "/", bukan "/maps". Bentuk ini
+  // tetap link peta yang sah, jadi host maps.* dengan root path ikut diterima.
+  return u.pathname.startsWith('/maps') || (host.startsWith('maps.') && u.pathname === '/');
 }
 
 /** Host yang boleh disentuh pada hop ke-`n`. */

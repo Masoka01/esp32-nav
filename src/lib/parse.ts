@@ -23,9 +23,26 @@ export function validLatLng(lat: number, lng: number): boolean {
       && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
 }
 
+/**
+ * Deteksi teks koordinat mentah seperti "-7.389593, 112.431493".
+ *
+ * Dipakai kotak pencarian supaya koordinat yang ditempel tidak dikirim ke
+ * Nominatim sebagai kata kunci biasa, dan dipakai parseMapsLink supaya
+ * koordinat mentah bisa langsung menjadi tujuan.
+ */
+export function parseCoordinateText(text: string): { lat: number; lng: number } | null {
+  const m = String(text || '').trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+  if (!m) return null;
+  const lat = parseFloat(m[1]), lng = parseFloat(m[2]);
+  return validLatLng(lat, lng) ? { lat, lng } : null;
+}
+
 export function parseMapsLink(text: string): ParseResult {
   const raw = String(text || '').trim();
   if (!raw) return { ok: false, reason: 'not-a-link' };
+
+  const coord = parseCoordinateText(raw);
+  if (coord) return { ok: true, lat: coord.lat, lng: coord.lng, name: 'Koordinat', exact: true };
 
   if (/^https?:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps)(\/|$)/i.test(raw))
     return { ok: false, reason: 'short-link' };
@@ -33,7 +50,10 @@ export function parseMapsLink(text: string): ParseResult {
   let u: URL;
   try { u = new URL(raw); } catch { return { ok: false, reason: 'not-a-link' }; }
 
-  if (!isGoogleMapsHost(u) || !u.pathname.startsWith('/maps'))
+  // maps.google.com/?q=lat,lng punya pathname "/", bukan "/maps". Bentuk ini
+  // tetap link peta yang sah, jadi host maps.* dengan root path ikut diterima.
+  const mapsRoot = u.hostname.toLowerCase().startsWith('maps.') && u.pathname === '/';
+  if (!isGoogleMapsHost(u) || (!u.pathname.startsWith('/maps') && !mapsRoot))
     return { ok: false, reason: 'not-a-link' };
 
   const safeDec = (t: string) => { try { return decodeURIComponent(t); } catch { return t; } };

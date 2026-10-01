@@ -14,7 +14,6 @@ export interface MapHandle {
 }
 
 interface Props {
-  onMapClick?: (lat: number, lng: number) => void;
   onReady?: () => void;
 }
 
@@ -28,20 +27,12 @@ const DEST_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height
   <circle cx="14" cy="14" r="6" fill="#fff"/>
 </svg>`;
 
-export const Map = forwardRef<MapHandle, Props>(function Map({ onMapClick, onReady }, ref) {
+export const Map = forwardRef<MapHandle, Props>(function Map({ onReady }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef      = useRef<any>(null);
   const userMarker  = useRef<any>(null);
   const destMarker  = useRef<any>(null);
   const routeLayer  = useRef<any>(null);
-  const clickHandlerRef = useRef(onMapClick);
-
-  // Handler klik disimpan di ref supaya peta tidak perlu dibuat ulang saat
-  // identitas onMapClick berubah. Tanpa ini, handler yang terpasang saat mount
-  // akan basi dan menutup nilai state lama.
-  useEffect(() => {
-    clickHandlerRef.current = onMapClick;
-  }, [onMapClick]);
 
   useEffect(() => {
     if (mapRef.current || !containerRef.current) return;
@@ -51,9 +42,6 @@ export const Map = forwardRef<MapHandle, Props>(function Map({ onMapClick, onRea
       maxZoom: 19,
     }).addTo(m);
     L.control.zoom({ position: 'bottomright' }).addTo(m);
-    m.on('click', (e: any) => {
-      clickHandlerRef.current?.(e.latlng.lat, e.latlng.lng);
-    });
     mapRef.current = m;
     // Peta baru siap sekarang. Halaman memakai onReady untuk menandai ulang
     // marker yang mungkin saja terlewat saat mapRef masih null.

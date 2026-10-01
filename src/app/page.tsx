@@ -39,11 +39,13 @@ export default function Home() {
   const [awakeWarn, setAwakeWarn]     = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const [drawerOpen, setDrawerOpen]   = useState(false);
-  const [mapsConfirm, setMapsConfirm] = useState<{ name: string; lat: number; lng: number; exact: boolean; source?: 'link' | 'map' } | null>(null);
+  const [mapsConfirm, setMapsConfirm] = useState<{ name: string; lat: number; lng: number; exact: boolean } | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<{ lat: number; lng: number; name: string } | null>(null);
-  // Mode pilih titik di peta (saat geocoding gagal)
-  const [pickPointMode, setPickPointMode] = useState(false);
-  const [pickPointName, setPickPointName] = useState<string>('');
+  // Permintaan mengisi kotak pencarian dari luar (mis. tautan nama-saja yang
+  // geocoding-nya gagal). `id` naik tiap permintaan supaya efek di SearchBar
+  // tetap terpicu walau query-nya sama.
+  const [searchPrefill, setSearchPrefill] = useState<{ query: string; id: number } | null>(null);
+  const prefillIdRef = useRef(0);
   const [vehicle, setVehicle]                 = useState<VehicleType>(state.vehicle);
   const [avoidTolls, setAvoidTolls]           = useState(state.avoidTolls);
   const [avoidHighways, setAvoidHighways]     = useState(state.avoidHighways);
@@ -191,35 +193,20 @@ export default function Home() {
     try {
       const hit = await geocodeName(name);
       if (!hit) {
-        // Geocoding gagal → masuk mode pilih titik di peta
-        setPickPointName(name);
-        setPickPointMode(true);
-        toast('Tempat tidak ditemukan otomatis. Ketuk peta untuk menentukan lokasinya.');
+        // Geocoding gagal. Kotak pencarian memang jalur utama mencari tempat,
+        // jadi isi kotak itu dengan nama dari tautan dan biarkan user memilih
+        // dari daftar saran, bukan meminta mengetuk peta.
+        setSearchValue(name);
+        setSearchPrefill({ query: name, id: ++prefillIdRef.current });
+        toast('Pencarian otomatis gagal. Pilih dari daftar atau ubah kata kunci.');
         return;
       }
-      setMapsConfirm({ name: hit.name, lat: hit.lat, lng: hit.lng, exact: false, source: 'link' });
+      setMapsConfirm({ name: hit.name, lat: hit.lat, lng: hit.lng, exact: false });
       setPendingConfirm({ lat: hit.lat, lng: hit.lng, name: hit.name });
     } catch {
       toast('Gagal mencari koordinat. Coba lagi.');
     }
   }, []);
-
-  // Handler untuk klik peta saat mode pilih-titik aktif
-  const handleMapClick = useCallback((lat: number, lng: number) => {
-    if (!pickPointMode) return;
-    // Keluar dari mode pilih-titik, tampilkan konfirmasi dengan koordinat hasil ketukan
-    setPickPointMode(false);
-    setMapsConfirm({
-      name: pickPointName,
-      lat,
-      lng,
-      // Titik yang dipilih user sendiri memang tepat, bukan perkiraan.
-      exact: true,
-      source: 'map',
-    });
-    setPendingConfirm({ lat, lng, name: pickPointName });
-    setPickPointName('');
-  }, [pickPointMode, pickPointName]);
 
   const handleMapsInput = useCallback(async (input: string) => {
     const raw = input.trim();
@@ -291,20 +278,14 @@ export default function Home() {
               onConfirmAccept={() => { if (pendingConfirm) selectDestination(pendingConfirm.lat, pendingConfirm.lng, pendingConfirm.name); setMapsConfirm(null); setPendingConfirm(null); }}
               onConfirmReject={() => { setMapsConfirm(null); setPendingConfirm(null); }}
               defaultValue={searchValue}
+              prefill={searchPrefill}
             />
           </div>
         </div>
 
         <div id="map">
-          {pickPointMode && (
-            <div className="pick-point-banner">
-              <span>Mode pilih lokasi: ketuk peta untuk menentukan posisi <strong>{pickPointName}</strong></span>
-              <button className="pick-point-cancel" onClick={() => { setPickPointMode(false); setPickPointName(''); }}>Batal</button>
-            </div>
-          )}
           <MapComponent
             ref={mapRef}
-            onMapClick={handleMapClick}
             onReady={() => {
               // Peta dimuat dinamis, jadi saat efek mount berjalan mapRef masih null
               // dan penanda sempat terlewat. Terapkan ulang dari state global.
