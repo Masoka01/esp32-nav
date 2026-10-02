@@ -25,6 +25,11 @@ next-env.d.ts
 # sesi tes, bukan bagian aplikasi.
 .playwright-mcp/
 
+# Worker MapLibre hasil salinan postinstall (scripts/copy-maplibre-worker.mjs).
+# Dibuat ulang tiap `npm install`, jadi tidak perlu masuk git.
+/public/maplibre-gl-worker.mjs
+/public/maplibre-gl-shared.mjs
+
 # OS / editor
 .DS_Store
 *.swp
