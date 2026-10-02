@@ -382,6 +382,10 @@ export function Drawer({
             <BookmarkletContent onClose={onClose} />
           )}
         </div>
+        <div className="drawer-footer">
+          <span>ESP-Nav</span>
+          <span className="drawer-version">{process.env.NEXT_PUBLIC_BUILD_ID ?? 'dev'}</span>
+        </div>
       </aside>
     </>
   );

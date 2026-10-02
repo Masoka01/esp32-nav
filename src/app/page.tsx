@@ -218,15 +218,15 @@ export default function Home() {
         const result = parseMapsLink(expanded);
         if (result.ok) { setMapsConfirm({ name: result.name!, lat: result.lat!, lng: result.lng!, exact: !!result.exact }); setPendingConfirm({ lat: result.lat!, lng: result.lng!, name: result.name! }); }
         else if (result.reason === 'needs-geocode' && result.name) await confirmFromName(result.name);
-        else toast('Link tidak bisa dibaca.');
-      } catch (e) { toast(e instanceof ResolveError ? e.userMessage : 'Gagal membuka link'); }
+        else { console.debug('[maps-input] gagal', { raw, expanded, reason: result.reason }); toast('Link tidak bisa dibaca.'); }
+      } catch (e) { console.debug('[maps-input] error', { raw, error: e }); toast(e instanceof ResolveError ? e.userMessage : 'Gagal membuka link'); }
       return;
     }
     const result = parseMapsLink(raw);
     if (result.ok) { setMapsConfirm({ name: result.name!, lat: result.lat!, lng: result.lng!, exact: !!result.exact }); setPendingConfirm({ lat: result.lat!, lng: result.lng!, name: result.name! }); }
     else if (result.reason === 'needs-geocode' && result.name) await confirmFromName(result.name);
-    else if (result.reason === 'short-link') toast('Short link tidak bisa dibaca.')
-    else toast('Link tidak dikenali sebagai link Google Maps.');
+    else if (result.reason === 'short-link') { console.debug('[maps-input] short-link tak ter-resolve', { raw }); toast('Short link tidak bisa dibaca.'); }
+    else { console.debug('[maps-input] bukan link', { raw, reason: result.reason }); toast('Link tidak dikenali sebagai link Google Maps.'); }
   }, [confirmFromName]);
 
   useEffect(() => {

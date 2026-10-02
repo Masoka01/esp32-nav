@@ -43,7 +43,7 @@
 // Naikkan setiap kali isi sw.js berubah. Ini bukan formalitas: nama cache
 // deriving dari VERSION, dan activate() menghapus seluruh cache versi lama.
 // Kalau VERSION tidak naik, HP memakai SW LAMA yang masih-controlled halaman.
-const VERSION = 'v4';
+const VERSION = 'v5';
 const SHELL_CACHE = `esp32nav-shell-${VERSION}`;
 
 // Hanya file yang benar-benar ada di public/. Modul aplikasi TIDAK bisa
